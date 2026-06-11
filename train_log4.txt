@@ -1,0 +1,208 @@
+Loading labels from labels\labels_clean.csv (quality: {'medium', 'high'})...
+Dataset: 17697 total | 15928 train | 1769 val
+Loading processor and model from models/trocr_apex...
+Loading weights:   0%|          | 0/362 [00:00<?, ?it/s]Loading weights: 100%|##########| 362/362 [00:00<00:00, 7009.84it/s]
+Using device: cpu
+  Epoch 1/10 | batch 99/1991 | loss 0.3603
+  Epoch 1/10 | batch 198/1991 | loss 0.3564
+  Epoch 1/10 | batch 297/1991 | loss 0.3604
+  Epoch 1/10 | batch 396/1991 | loss 0.3622
+  Epoch 1/10 | batch 495/1991 | loss 0.3598
+  Epoch 1/10 | batch 594/1991 | loss 0.3575
+  Epoch 1/10 | batch 693/1991 | loss 0.3598
+  Epoch 1/10 | batch 792/1991 | loss 0.3665
+  Epoch 1/10 | batch 891/1991 | loss 0.3680
+  Epoch 1/10 | batch 990/1991 | loss 0.3703
+  Epoch 1/10 | batch 1089/1991 | loss 0.3780
+  Epoch 1/10 | batch 1188/1991 | loss 0.3829
+  Epoch 1/10 | batch 1287/1991 | loss 0.3863
+  Epoch 1/10 | batch 1386/1991 | loss 0.3916
+  Epoch 1/10 | batch 1485/1991 | loss 0.3976
+  Epoch 1/10 | batch 1584/1991 | loss 0.4046
+  Epoch 1/10 | batch 1683/1991 | loss 0.4109
+  Epoch 1/10 | batch 1782/1991 | loss 0.4153
+  Epoch 1/10 | batch 1881/1991 | loss 0.4211
+  Epoch 1/10 | batch 1980/1991 | loss 0.4272
+  Epoch 1/10 | batch 1991/1991 | loss 0.4272
+Epoch 01/10 | loss=0.4272 | CER=0.1800
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|##########| 1/1 [00:00<00:00,  2.69it/s]Writing model shards: 100%|##########| 1/1 [00:00<00:00,  2.69it/s]
+  [BEST] New best CER=0.1800 - model saved to models\trocr_apex
+  Epoch 2/10 | batch 99/1991 | loss 0.4687
+  Epoch 2/10 | batch 198/1991 | loss 0.4818
+  Epoch 2/10 | batch 297/1991 | loss 0.5060
+  Epoch 2/10 | batch 396/1991 | loss 0.5172
+  Epoch 2/10 | batch 495/1991 | loss 0.5134
+  Epoch 2/10 | batch 594/1991 | loss 0.5125
+  Epoch 2/10 | batch 693/1991 | loss 0.5137
+  Epoch 2/10 | batch 792/1991 | loss 0.5191
+  Epoch 2/10 | batch 891/1991 | loss 0.5210
+  Epoch 2/10 | batch 990/1991 | loss 0.5201
+  Epoch 2/10 | batch 1089/1991 | loss 0.5219
+  Epoch 2/10 | batch 1188/1991 | loss 0.5250
+  Epoch 2/10 | batch 1287/1991 | loss 0.5218
+  Epoch 2/10 | batch 1386/1991 | loss 0.5236
+  Epoch 2/10 | batch 1485/1991 | loss 0.5280
+  Epoch 2/10 | batch 1584/1991 | loss 0.5298
+  Epoch 2/10 | batch 1683/1991 | loss 0.5289
+  Epoch 2/10 | batch 1782/1991 | loss 0.5269
+  Epoch 2/10 | batch 1881/1991 | loss 0.5265
+  Epoch 2/10 | batch 1980/1991 | loss 0.5271
+  Epoch 2/10 | batch 1991/1991 | loss 0.5273
+Epoch 02/10 | loss=0.5273 | CER=0.1664
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|##########| 1/1 [00:00<00:00,  2.81it/s]Writing model shards: 100%|##########| 1/1 [00:00<00:00,  2.80it/s]
+  [BEST] New best CER=0.1664 - model saved to models\trocr_apex
+  Epoch 3/10 | batch 99/1991 | loss 0.4278
+  Epoch 3/10 | batch 198/1991 | loss 0.4354
+  Epoch 3/10 | batch 297/1991 | loss 0.4478
+  Epoch 3/10 | batch 396/1991 | loss 0.4507
+  Epoch 3/10 | batch 495/1991 | loss 0.4554
+  Epoch 3/10 | batch 594/1991 | loss 0.4663
+  Epoch 3/10 | batch 693/1991 | loss 0.4688
+  Epoch 3/10 | batch 792/1991 | loss 0.4668
+  Epoch 3/10 | batch 891/1991 | loss 0.4662
+  Epoch 3/10 | batch 990/1991 | loss 0.4652
+  Epoch 3/10 | batch 1089/1991 | loss 0.4709
+  Epoch 3/10 | batch 1188/1991 | loss 0.4713
+  Epoch 3/10 | batch 1287/1991 | loss 0.4759
+  Epoch 3/10 | batch 1386/1991 | loss 0.4724
+  Epoch 3/10 | batch 1485/1991 | loss 0.4735
+  Epoch 3/10 | batch 1584/1991 | loss 0.4749
+  Epoch 3/10 | batch 1683/1991 | loss 0.4716
+  Epoch 3/10 | batch 1782/1991 | loss 0.4742
+  Epoch 3/10 | batch 1881/1991 | loss 0.4775
+  Epoch 3/10 | batch 1980/1991 | loss 0.4770
+  Epoch 3/10 | batch 1991/1991 | loss 0.4764
+Epoch 03/10 | loss=0.4764 | CER=0.1764
+  Epoch 4/10 | batch 99/1991 | loss 0.4284
+  Epoch 4/10 | batch 198/1991 | loss 0.4326
+  Epoch 4/10 | batch 297/1991 | loss 0.4313
+  Epoch 4/10 | batch 396/1991 | loss 0.4194
+  Epoch 4/10 | batch 495/1991 | loss 0.4212
+  Epoch 4/10 | batch 594/1991 | loss 0.4284
+  Epoch 4/10 | batch 693/1991 | loss 0.4304
+  Epoch 4/10 | batch 792/1991 | loss 0.4250
+  Epoch 4/10 | batch 891/1991 | loss 0.4262
+  Epoch 4/10 | batch 990/1991 | loss 0.4244
+  Epoch 4/10 | batch 1089/1991 | loss 0.4238
+  Epoch 4/10 | batch 1188/1991 | loss 0.4216
+  Epoch 4/10 | batch 1287/1991 | loss 0.4230
+  Epoch 4/10 | batch 1386/1991 | loss 0.4229
+  Epoch 4/10 | batch 1485/1991 | loss 0.4198
+  Epoch 4/10 | batch 1584/1991 | loss 0.4191
+  Epoch 4/10 | batch 1683/1991 | loss 0.4178
+  Epoch 4/10 | batch 1782/1991 | loss 0.4152
+  Epoch 4/10 | batch 1881/1991 | loss 0.4165
+  Epoch 4/10 | batch 1980/1991 | loss 0.4160
+  Epoch 4/10 | batch 1991/1991 | loss 0.4157
+Epoch 04/10 | loss=0.4157 | CER=0.1651
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|##########| 1/1 [00:00<00:00,  2.89it/s]Writing model shards: 100%|##########| 1/1 [00:00<00:00,  2.89it/s]
+  [BEST] New best CER=0.1651 - model saved to models\trocr_apex
+  Epoch 5/10 | batch 99/1991 | loss 0.3575
+  Epoch 5/10 | batch 198/1991 | loss 0.3471
+  Epoch 5/10 | batch 297/1991 | loss 0.3532
+  Epoch 5/10 | batch 396/1991 | loss 0.3479
+  Epoch 5/10 | batch 495/1991 | loss 0.3523
+  Epoch 5/10 | batch 594/1991 | loss 0.3574
+  Epoch 5/10 | batch 693/1991 | loss 0.3533
+  Epoch 5/10 | batch 792/1991 | loss 0.3543
+  Epoch 5/10 | batch 891/1991 | loss 0.3521
+  Epoch 5/10 | batch 990/1991 | loss 0.3545
+  Epoch 5/10 | batch 1089/1991 | loss 0.3512
+  Epoch 5/10 | batch 1188/1991 | loss 0.3550
+  Epoch 5/10 | batch 1287/1991 | loss 0.3559
+  Epoch 5/10 | batch 1386/1991 | loss 0.3533
+  Epoch 5/10 | batch 1485/1991 | loss 0.3544
+  Epoch 5/10 | batch 1584/1991 | loss 0.3573
+  Epoch 5/10 | batch 1683/1991 | loss 0.3588
+  Epoch 5/10 | batch 1782/1991 | loss 0.3613
+  Epoch 5/10 | batch 1881/1991 | loss 0.3612
+  Epoch 5/10 | batch 1980/1991 | loss 0.3634
+  Epoch 5/10 | batch 1991/1991 | loss 0.3634
+Epoch 05/10 | loss=0.3634 | CER=0.1554
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|##########| 1/1 [00:00<00:00,  2.74it/s]Writing model shards: 100%|##########| 1/1 [00:00<00:00,  2.74it/s]
+  [BEST] New best CER=0.1554 - model saved to models\trocr_apex
+  Epoch 6/10 | batch 99/1991 | loss 0.3266
+  Epoch 6/10 | batch 198/1991 | loss 0.2995
+  Epoch 6/10 | batch 297/1991 | loss 0.3057
+  Epoch 6/10 | batch 396/1991 | loss 0.3010
+  Epoch 6/10 | batch 495/1991 | loss 0.3023
+  Epoch 6/10 | batch 594/1991 | loss 0.3054
+  Epoch 6/10 | batch 693/1991 | loss 0.3049
+  Epoch 6/10 | batch 792/1991 | loss 0.3082
+  Epoch 6/10 | batch 891/1991 | loss 0.3052
+  Epoch 6/10 | batch 990/1991 | loss 0.3094
+  Epoch 6/10 | batch 1089/1991 | loss 0.3105
+  Epoch 6/10 | batch 1188/1991 | loss 0.3099
+  Epoch 6/10 | batch 1287/1991 | loss 0.3074
+  Epoch 6/10 | batch 1386/1991 | loss 0.3122
+  Epoch 6/10 | batch 1485/1991 | loss 0.3105
+  Epoch 6/10 | batch 1584/1991 | loss 0.3116
+  Epoch 6/10 | batch 1683/1991 | loss 0.3118
+  Epoch 6/10 | batch 1782/1991 | loss 0.3120
+  Epoch 6/10 | batch 1881/1991 | loss 0.3117
+  Epoch 6/10 | batch 1980/1991 | loss 0.3113
+  Epoch 6/10 | batch 1991/1991 | loss 0.3116
+Epoch 06/10 | loss=0.3116 | CER=0.1558
+  Epoch 7/10 | batch 99/1991 | loss 0.2589
+  Epoch 7/10 | batch 198/1991 | loss 0.2621
+  Epoch 7/10 | batch 297/1991 | loss 0.2660
+  Epoch 7/10 | batch 396/1991 | loss 0.2675
+  Epoch 7/10 | batch 495/1991 | loss 0.2635
+  Epoch 7/10 | batch 594/1991 | loss 0.2660
+  Epoch 7/10 | batch 693/1991 | loss 0.2678
+  Epoch 7/10 | batch 792/1991 | loss 0.2661
+  Epoch 7/10 | batch 891/1991 | loss 0.2672
+  Epoch 7/10 | batch 990/1991 | loss 0.2670
+  Epoch 7/10 | batch 1089/1991 | loss 0.2677
+  Epoch 7/10 | batch 1188/1991 | loss 0.2668
+  Epoch 7/10 | batch 1287/1991 | loss 0.2662
+  Epoch 7/10 | batch 1386/1991 | loss 0.2657
+  Epoch 7/10 | batch 1485/1991 | loss 0.2670
+  Epoch 7/10 | batch 1584/1991 | loss 0.2681
+  Epoch 7/10 | batch 1683/1991 | loss 0.2675
+  Epoch 7/10 | batch 1782/1991 | loss 0.2681
+  Epoch 7/10 | batch 1881/1991 | loss 0.2664
+  Epoch 7/10 | batch 1980/1991 | loss 0.2675
+  Epoch 7/10 | batch 1991/1991 | loss 0.2673
+Epoch 07/10 | loss=0.2673 | CER=0.1491
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|##########| 1/1 [00:00<00:00,  2.84it/s]Writing model shards: 100%|##########| 1/1 [00:00<00:00,  2.83it/s]
+  [BEST] New best CER=0.1491 - model saved to models\trocr_apex
+  Epoch 8/10 | batch 99/1991 | loss 0.2314
+  Epoch 8/10 | batch 198/1991 | loss 0.2244
+  Epoch 8/10 | batch 297/1991 | loss 0.2199
+  Epoch 8/10 | batch 396/1991 | loss 0.2282
+  Epoch 8/10 | batch 495/1991 | loss 0.2244
+  Epoch 8/10 | batch 594/1991 | loss 0.2282
+  Epoch 8/10 | batch 693/1991 | loss 0.2270
+  Epoch 8/10 | batch 792/1991 | loss 0.2282
+  Epoch 8/10 | batch 891/1991 | loss 0.2289
+  Epoch 8/10 | batch 990/1991 | loss 0.2288
+  Epoch 8/10 | batch 1089/1991 | loss 0.2266
+  Epoch 8/10 | batch 1188/1991 | loss 0.2256
+  Epoch 8/10 | batch 1287/1991 | loss 0.2258
+  Epoch 8/10 | batch 1386/1991 | loss 0.2261
+  Epoch 8/10 | batch 1485/1991 | loss 0.2261
+  Epoch 8/10 | batch 1584/1991 | loss 0.2248
+  Epoch 8/10 | batch 1683/1991 | loss 0.2231
+  Epoch 8/10 | batch 1782/1991 | loss 0.2222
+  Epoch 8/10 | batch 1881/1991 | loss 0.2225
+  Epoch 8/10 | batch 1980/1991 | loss 0.2217
+  Epoch 8/10 | batch 1991/1991 | loss 0.2217
+Epoch 08/10 | loss=0.2217 | CER=0.1464
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|##########| 1/1 [00:00<00:00,  2.69it/s]Writing model shards: 100%|##########| 1/1 [00:00<00:00,  2.69it/s]
+  [BEST] New best CER=0.1464 - model saved to models\trocr_apex
+  Epoch 9/10 | batch 99/1991 | loss 0.2025
+  Epoch 9/10 | batch 198/1991 | loss 0.2160
+  Epoch 9/10 | batch 297/1991 | loss 0.2022
+  Epoch 9/10 | batch 396/1991 | loss 0.1944
+  Epoch 9/10 | batch 495/1991 | loss 0.1938
+  Epoch 9/10 | batch 594/1991 | loss 0.1902
+  Epoch 9/10 | batch 693/1991 | loss 0.1873
+  Epoch 9/10 | batch 792/1991 | loss 0.1884
+  Epoch 9/10 | batch 891/1991 | loss 0.1881
+  Epoch 9/10 | batch 990/1991 | loss 0.1894
+  Epoch 9/10 | batch 1089/1991 | loss 0.1892
+  Epoch 9/10 | batch 1188/1991 | loss 0.1873
+  Epoch 9/10 | batch 1287/1991 | loss 0.1852
+  Epoch 9/10 | batch 1386/1991 | loss 0.1836
+  Epoch 9/10 | batch 1485/1991 | loss 0.1827

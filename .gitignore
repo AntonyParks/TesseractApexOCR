@@ -1,0 +1,24 @@
+# Environments & Packages
+.venv/
+node_modules/
+.next/
+__pycache__/
+*.pyc
+
+# Local Configs & Executables
+.env
+.env.local
+cloudflared.exe
+.idea/
+.claude/
+
+# Databases & Logs
+elo.db*
+killfeed_log.csv
+
+# Image & Dataset crops
+crops/
+crops_noise/
+labels/
+colab_bundle.zip
+models/
