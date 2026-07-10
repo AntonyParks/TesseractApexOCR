@@ -15,10 +15,20 @@ cloudflared.exe
 # Databases & Logs
 elo.db*
 killfeed_log.csv
+calibration_cache.json
 
 # Image & Dataset crops
 crops/
 crops_noise/
 labels/
 colab_bundle.zip
+easyocr_lmdb_dataset_ready/
+easyocr_lmdb_dataset_ready.zip
+easyocr_dataset_staging/
 models/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/

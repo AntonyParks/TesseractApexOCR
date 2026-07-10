@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "TesseractApexOCR",
+  "project_id": "56b4a1fe-fa23-4cd1-bbce-329636c8e982"
+}
