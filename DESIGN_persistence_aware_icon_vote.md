@@ -1,5 +1,10 @@
 # Design: Persistence-Aware Icon Vote (kill/knock)
 
+> **Tracking moved to Beads (2026-07-10).** Actionable rollout is beads issue
+> **`TesseractApexOCR-1t4`** — currently **blocked by** `TesseractApexOCR-1gn` (name canonicalization),
+> matching the calibration verdict below. This file remains the design reference; track status via
+> `bd show TesseractApexOCR-1t4`, not by editing here.
+
 Status: **IMPLEMENTED, gated OFF** (2026-07-09). Layer 1 (`ocr.py`: `_icon_vote`,
 `_apply_icon_decision`, `find_recent_match`, `flush_old_events`), Layer 2 (`db_log.py`:
 `insert_event` group_key + `_seed_cluster`), flags in `config.py`. Unit test:

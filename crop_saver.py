@@ -59,16 +59,25 @@ class CropSaver:
         self._recent.clear()
 
     # ------------------------------------------------------------------
-    def maybe_save(self, processed_img: np.ndarray, line_index: int, now: float) -> bool:
+    def maybe_save(
+        self,
+        processed_img: np.ndarray,
+        line_index: int,
+        now: float,
+        raw_img: np.ndarray | None = None,
+    ) -> str | None:
         """Save *processed_img* if it is not a duplicate of a recent crop.
 
         Args:
             processed_img: Preprocessed (inverted, upscaled) line image (uint8 grayscale).
             line_index:     0-based index of the killfeed line.
             now:            Current timestamp (time.time()).
+            raw_img:        Optional raw frame crop (BGR or BGRA) before preprocessing.
+                            When provided, saved as ``{base}_raw.png`` alongside the
+                            processed file so the viewer can show the original color screenshot.
 
         Returns:
-            True if the crop was saved, False if skipped as duplicate.
+            The stem filename (e.g. 'YYYYMMDD_HHMMSS_lineN_hex4') if saved, None if skipped.
         """
         # Evict stale entries outside the dedup window
         self._recent = [(t, h) for t, h in self._recent if now - t <= CROP_DEDUP_WINDOW]
@@ -78,19 +87,26 @@ class CropSaver:
         for _, old_h in self._recent:
             if _hamming(h, old_h) <= CROP_PHASH_THRESHOLD:
                 self._skipped += 1
-                return False
+                return None
 
         # Not a duplicate — save
         self._recent.append((now, h))
 
         ts = time.strftime("%Y%m%d_%H%M%S", time.localtime(now))
         hex4 = f"{h & 0xFFFF:04x}"
-        filename = f"{ts}_line{line_index}_{hex4}.png"
-        path = self._out_dir / filename
+        stem = f"{ts}_line{line_index}_{hex4}"
+        cv2.imwrite(str(self._out_dir / f"{stem}.png"), processed_img)
 
-        cv2.imwrite(str(path), processed_img)
+        if raw_img is not None:
+            # Convert BGRA → BGR so cv2.imwrite produces a colour PNG
+            if raw_img.ndim == 3 and raw_img.shape[2] == 4:
+                raw_bgr = cv2.cvtColor(raw_img, cv2.COLOR_BGRA2BGR)
+            else:
+                raw_bgr = raw_img
+            cv2.imwrite(str(self._out_dir / f"{stem}_raw.png"), raw_bgr)
+
         self._saved += 1
-        return True
+        return stem
 
     # ------------------------------------------------------------------
     @property

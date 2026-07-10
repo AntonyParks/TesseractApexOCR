@@ -1,11 +1,11 @@
-"""Validate haiku_validator.py against real crops.
+"""Validate gemini_validator.py against real crops.
 
 Usage:
-    python validate_haiku.py                      # 20 random crops from all streamers
-    python validate_haiku.py --n 50               # 50 random crops
-    python validate_haiku.py --streamer Faide     # restrict to one streamer
-    python validate_haiku.py --quality high       # only crops already labeled 'high'
-    python validate_haiku.py --compare            # compare Haiku vs existing labels_clean.csv labels
+    python validate_gemini.py                      # 20 random crops from all streamers
+    python validate_gemini.py --n 50               # 50 random crops
+    python validate_gemini.py --streamer Faide     # restrict to one streamer
+    python validate_gemini.py --quality high       # only crops already labeled 'high'
+    python validate_gemini.py --compare            # compare Gemini vs existing labels_clean.csv labels
 """
 
 import argparse
@@ -22,9 +22,9 @@ import numpy as np
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-from config import HAIKU_CONF_THRESHOLD
+from config import GEMINI_AGREE_THRESHOLD
 from database import PlayerDatabase
-from haiku_validator import validate_killfeed_crop
+from gemini_validator import validate_killfeed_crop
 from parsers import parse_killfeed_line
 
 CROPS_DIR  = Path("crops")
@@ -41,16 +41,6 @@ def _load_crop(path: Path) -> np.ndarray | None:
 
 def _similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
-
-
-def _would_trigger(parsed: dict) -> bool:
-    return (
-        parsed.get("event_type") == "Kill"
-        and (
-            parsed.get("victim_conf", 1.0) < HAIKU_CONF_THRESHOLD
-            or parsed.get("attacker_conf", 1.0) < HAIKU_CONF_THRESHOLD
-        )
-    )
 
 
 def _collect_crops(streamer: str | None, quality_filter: str | None) -> list[Path]:
@@ -96,7 +86,6 @@ def run_validation(n: int, streamer: str | None, quality_filter: str | None,
     valid = 0
     rejected = 0
     kill_events = 0
-    would_trigger = 0
     exact_matches = 0
     partial_matches = 0
     disagreements = 0
@@ -111,39 +100,33 @@ def run_validation(n: int, streamer: str | None, quality_filter: str | None,
             continue
 
         t0 = time.time()
-        haiku_text = validate_killfeed_crop(crop)
+        gemini_text = validate_killfeed_crop(crop)
         elapsed = time.time() - t0
 
-        if haiku_text is None:
-            print(f"  Haiku:  EMPTY / rejected  ({elapsed:.1f}s)\n")
+        if gemini_text is None:
+            print(f"  Gemini:  EMPTY / rejected  ({elapsed:.1f}s)\n")
             rejected += 1
             continue
 
         valid += 1
-        parsed = parse_killfeed_line(haiku_text, db, time.time())
+        parsed = parse_killfeed_line(gemini_text, db, time.time())
         evt = parsed.get("event_type") or "—"
         atk = parsed.get("attacker") or "—"
         vic = parsed.get("victim") or "—"
         a_conf = parsed.get("attacker_conf", 0.0)
         v_conf = parsed.get("victim_conf", 0.0)
 
-        trigger = _would_trigger(parsed)
-        trigger_str = "YES  <-- low conf" if trigger else "NO"
-
-        print(f"  Haiku:  {haiku_text!r}  ({elapsed:.1f}s)")
+        print(f"  Gemini:  {gemini_text!r}  ({elapsed:.1f}s)")
         print(f"  Parsed: event={evt}  atk={atk} ({a_conf:.2f})  vic={vic} ({v_conf:.2f})")
-        print(f"  Would trigger live validation (conf < {HAIKU_CONF_THRESHOLD}): {trigger_str}")
 
         if evt == "Kill":
             kill_events += 1
-        if trigger:
-            would_trigger += 1
 
-        # --compare: show existing label vs Haiku
+        # --compare: show existing label vs Gemini
         if compare:
             existing = existing_labels.get(str(path))
             if existing:
-                sim = _similarity(haiku_text, existing)
+                sim = _similarity(gemini_text, existing)
                 if sim >= 0.99:
                     match_str = "EXACT"
                     exact_matches += 1
@@ -159,6 +142,8 @@ def run_validation(n: int, streamer: str | None, quality_filter: str | None,
                 print("  Existing label: (none in labels_clean.csv)")
 
         print()
+        if i < total:
+            time.sleep(5.5)
 
     # Summary
     print(f"{'='*60}")
@@ -168,8 +153,6 @@ def run_validation(n: int, streamer: str | None, quality_filter: str | None,
     print(f"EMPTY / rejected:   {rejected:3d} / {total}  ({100*rejected/total:.0f}%)")
     if valid:
         print(f"Kill events:        {kill_events:3d} / {valid}  ({100*kill_events/valid:.0f}% of valid)")
-        print(f"Would trigger:      {would_trigger:3d} / {kill_events if kill_events else 1}  "
-              f"({100*would_trigger/max(kill_events,1):.0f}% of kills)")
     if compare and (exact_matches + partial_matches + disagreements):
         compared = exact_matches + partial_matches + disagreements
         print(f"\nComparison vs labels_clean.csv ({compared} matched):")
@@ -179,14 +162,14 @@ def run_validation(n: int, streamer: str | None, quality_filter: str | None,
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Validate haiku_validator against real crops")
+    parser = argparse.ArgumentParser(description="Validate gemini_validator against real crops")
     parser.add_argument("--n", type=int, default=20, help="Number of crops to sample")
     parser.add_argument("--streamer", type=str, default=None, help="Filter to one streamer")
     parser.add_argument("--quality", type=str, default=None,
                         choices=["high", "medium", "low"],
                         help="Only sample crops with this quality tier from labels_clean.csv")
     parser.add_argument("--compare", action="store_true",
-                        help="Compare Haiku output vs existing labels_clean.csv labels")
+                        help="Compare Gemini output vs existing labels_clean.csv labels")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
     args = parser.parse_args()
 

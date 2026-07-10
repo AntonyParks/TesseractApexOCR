@@ -32,6 +32,9 @@ export interface MatchKill {
 export interface MatchPlacement {
   player: string;
   kill_order_out: number;
+  // 1 = never eliminated on stream; kill_order_out is then a survival floor
+  // ("alive at least until kill N"), not an elimination position
+  survived: number;
   elo_before: number;
   elo_after: number;
   elo_change: number;
@@ -45,6 +48,8 @@ export interface Match {
   end_time: string;
   kill_count: number;
   players_observed: number;
+  // comma-separated match_ids of other streamers' records merged into this one
+  merged_from?: string;
 }
 
 // /matches/{id} returns { match: Match, kills: MatchKill[], placements: MatchPlacement[] }

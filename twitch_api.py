@@ -42,6 +42,43 @@ def _get_game_id(headers: dict, game_name: str) -> str:
     return data[0]["id"]
 
 
+def is_streams_live(usernames: list[str]) -> dict[str, bool]:
+    """Return {username: is_currently_live} for the given Twitch usernames (one batched call).
+
+    Requires env vars TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET.
+    """
+    if not usernames:
+        return {}
+
+    client_id     = os.environ.get("TWITCH_CLIENT_ID", "")
+    client_secret = os.environ.get("TWITCH_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        raise ValueError(
+            "Set TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET environment variables. "
+            "Get credentials at https://dev.twitch.tv/console"
+        )
+
+    token = _get_app_token(client_id, client_secret)
+    headers = {
+        "Client-Id":     client_id,
+        "Authorization": f"Bearer {token}",
+    }
+
+    # Helix accepts up to 100 user_login params per request.
+    live = set()
+    for i in range(0, len(usernames), 100):
+        chunk = usernames[i:i + 100]
+        resp = requests.get(
+            _STREAMS_URL, headers=headers,
+            params=[("user_login", u) for u in chunk],
+            timeout=10,
+        )
+        resp.raise_for_status()
+        live.update(s["user_login"].lower() for s in resp.json().get("data", []))
+
+    return {u: u.lower() in live for u in usernames}
+
+
 def get_top_apex_streams(n: int = 20, ranked_only: bool = False) -> list[str]:
     """Return up to *n* Twitch usernames currently streaming Apex, sorted by viewers.
 

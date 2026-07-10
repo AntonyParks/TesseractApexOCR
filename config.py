@@ -314,6 +314,14 @@ ICON_KILL_MIN_RUN   = 3      # contiguous kill-icon reads required to call a mer
 ICON_KILL_MIN_FRAC  = 0.50   # kill-icon reads as a fraction of the merged line's marker-reads
 ICON_VOTE_LOG       = True   # instrument: log per-flushed-track icon tallies (safe with vote off)
 STICKY_CHAIN_MERGE_TYPES = False  # Layer 2: key db_log sticky chain by name-pair, not event_type
+# Stem-aware multikill guard: when sticky suppression would drop an ELO row, KEEP it if its victim
+# shares a kept victim's alpha-stem but has clearly different digits (a default-name multikill like
+# gibraltar2127 vs gibraltar1619 -- one attacker beaming two different default-named players fast).
+# Measured (scratch/measure, 2026-07-10): re-admits only 3 rows on run2 (keeps 99.7% of
+# sticky-catching) while protecting the genuine multikill. Off by default: plain cap=2 is the
+# validated baseline; residual risk is a number-garbling sticky whose victim-digits jitter (leaks
+# ~1 row per distinct garble). See db_log._distinct_default_name_victim.
+SAME_VICTIM_GUARD = False
 
 SAVE_INTERVAL = 30  # Save database every 30 seconds
 STREAMER_CHECK_INTERVAL = 60  # Check streamer name every 60 seconds

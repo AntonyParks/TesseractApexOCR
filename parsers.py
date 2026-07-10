@@ -4,7 +4,8 @@ import re
 from typing import Dict, Optional, Tuple
 
 from config import (
-    COMMON_WORDS, TYPO_MAP, PLAYER_NAME_MIN_LENGTH, APEX_LEGENDS_CANONICAL
+    COMMON_WORDS, TYPO_MAP, PLAYER_NAME_MIN_LENGTH, APEX_LEGENDS_CANONICAL,
+    KNOCK_KILL_DISTINCTION
 )
 
 
@@ -22,7 +23,7 @@ WEAPON_KEYWORDS = [
 ]
 
 # Events that should have no victim (announcements only)
-NO_VICTIM_EVENTS = ["SuggestLocation", "Ping", "Audio", "Scan"]
+NO_VICTIM_EVENTS = ["SuggestLocation", "Ping", "Audio", "Scan", "ShieldBroken", "MyShieldBroken", "Eliminated", "LootedCarePackage"]
 
 
 def extract_player_from_segment(segment: str, allow_compound: bool = False):
@@ -43,11 +44,6 @@ def extract_player_from_segment(segment: str, allow_compound: bool = False):
     if not segment or len(segment) < 3:
         return None
 
-    # If segment starts with "twitch" (any form), it's a Twitch URL overlay.
-    # Reject the whole segment — mangled reads like "twitch (vst oneyg" must not
-    # produce fake player names like "oney" or "dneve".
-    if segment.lower().lstrip().startswith('twitch'):
-        return None
 
     # Extract tokens (including brackets)
     tokens = re.findall(r'[\[\(]?[A-Za-z0-9_./-]+[\]\)]?', segment)
@@ -115,6 +111,9 @@ def extract_player_from_segment(segment: str, allow_compound: bool = False):
         # Join all valid tokens for compound names
         return ' '.join(valid_tokens)
     else:
+        # If the name starts with twitch/ttv, keep it compound
+        if len(valid_tokens) > 1 and valid_tokens[0].lower() in ('twitch', 'ttv'):
+            return ' '.join(valid_tokens)
         # Return first valid token
         return valid_tokens[0]
 
@@ -133,6 +132,10 @@ def split_by_gun_icon(text: str) -> Tuple[str, Optional[str]]:
     # align_and_vote() lowercases OCR variants, turning <GUN_ICON> into <gun_icon>.
     text = re.sub(r'\bgunicon\b', '<GUN_ICON>', text, flags=re.IGNORECASE)
     text = re.sub(r'<gun_icon>', '<GUN_ICON>', text, flags=re.IGNORECASE)
+    # <KILL_ICON> (red elimination skull detected in the gap) splits identically -- the
+    # knock/kill distinction is handled by the caller via has_kill_marker(), not here.
+    text = re.sub(r'\bkillicon\b', '<GUN_ICON>', text, flags=re.IGNORECASE)
+    text = re.sub(r'<kill_icon>', '<GUN_ICON>', text, flags=re.IGNORECASE)
 
     # Split on gun icon markers or multiple spaces
     if '<GUN_ICON>' in text:
@@ -290,11 +293,30 @@ def is_invalid_player_name(name: str) -> bool:
 
     name_low = name.lower().strip()
 
-    # Filter out gun icon markers
-    if 'gun' in name_low and 'icon' in name_low:
+    # Filter out standalone legend names (case-insensitive)
+    name_title = name.title()
+    if name_title in APEX_LEGENDS_CANONICAL or name in APEX_LEGENDS_CANONICAL:
+        return True
+    if name_low in {l.lower() for l in APEX_LEGENDS_CANONICAL}:
+        return True
+
+    # Filter out gun icon markers, including partial OCR reads of the marker (e.g. "un_icon"
+    # from a dropped leading "g" -- the marker is a tiny weapon-icon graphic, not real text, so
+    # character-level OCR accuracy on it is unreliable). "icon" is not a plausible substring of
+    # a real Apex player name, so treat any short fragment containing it as the marker leaking
+    # through rather than requiring an exact/full match.
+    if 'icon' in name_low and len(name_low) <= 12:
         return True
 
     if name_low in ['<gun_icon>', 'gunicon', 'gun_icon', 'gun', 'icon']:
+        return True
+
+    # [Bleed Out] tag fragments leaking into names (e.g. "int[Bleed", "Out]m")
+    if '[bleed' in name_low or 'bleed]' in name_low:
+        return True
+
+    # Names that are ONLY a clan tag (e.g. "[x78]") -- the actual name was lost to OCR
+    if re.fullmatch(r'\[[^\]]*\]', name.strip()):
         return True
 
     # Filter names that start with special chars (like /sg, -name, etc.)
@@ -310,10 +332,11 @@ def is_invalid_player_name(name: str) -> bool:
         "champion", "are", "and", "guy", "looking", "people", "compromise",
         "compromised", "lacation", "focation", "area", "over", "defend",
         "avoid", "this", "looting", "from", "full", "beam", "for", "since",
-        "fridge", "samsung", "twitch", "subscribe", "crafting", "ready",
+        "fridge", "samsung", "subscribe", "crafting", "ready",
         "fall", "akimbo", "heavy", "rounds", "elevator", "music",
         "connoisseur", "connnissaiir", "lonnolsseur", "melee", "edge",
         "sakuras", "sakurasedge",
+        "directly", "clearly", "getting", "gettingt", "pushed",
     ]
 
     if name_low in invalid_patterns:
@@ -369,6 +392,45 @@ def clean_player_name(name: str) -> str:
 
 
 def parse_killfeed_line(line: str, db, timestamp: Optional[float] = None) -> Dict[str, Optional[str]]:
+    res = _parse_killfeed_line_raw(line, db, timestamp)
+    if not res:
+        return res
+
+    attacker = res.get("attacker")
+    victim = res.get("victim")
+    event_type = res.get("event_type")
+    attacker_conf = res.get("attacker_conf", 0.0)
+    victim_conf = res.get("victim_conf", 0.0)
+
+    # Clean up legend leaks/weapons/invalid names from normalized attacker
+    if attacker:
+        if is_invalid_player_name(attacker) or is_weapon_or_attachment(attacker):
+            attacker = None
+            attacker_conf = 0.0
+
+    # Clean up legend leaks/weapons/invalid names from normalized victim
+    if victim:
+        if is_invalid_player_name(victim) or is_weapon_or_attachment(victim):
+            victim = None
+            victim_conf = 0.0
+
+    # Check for self-kills (OCR splitting failures or suicides)
+    if attacker and victim and attacker.lower() == victim.lower():
+        attacker = None
+        victim = None
+        event_type = None
+        attacker_conf = 0.0
+        victim_conf = 0.0
+
+    res["attacker"] = attacker
+    res["victim"] = victim
+    res["event_type"] = event_type
+    res["attacker_conf"] = attacker_conf
+    res["victim_conf"] = victim_conf
+    return res
+
+
+def _parse_killfeed_line_raw(line: str, db, timestamp: Optional[float] = None) -> Dict[str, Optional[str]]:
     """Extract attacker, victim, and event_type from killfeed line.
 
     Args:
@@ -384,6 +446,29 @@ def parse_killfeed_line(line: str, db, timestamp: Optional[float] = None) -> Dic
     event_type = None
     low = canonical.lower()
 
+    # Knock vs kill: the OCR layer emits <KILL_ICON> when the red elimination skull was
+    # detected in the icon gap, <GUN_ICON> otherwise. A skull line is a confirmed
+    # elimination ('Kill'); a plain gap line is a knockdown ('Knock') -- the victim may be
+    # revived and the pair may legitimately recur (knock+finish, revive/respawn cycles).
+    # With KNOCK_KILL_DISTINCTION off, everything stays 'Kill' (legacy behavior; required
+    # for OCR paths that never emit <KILL_ICON>, e.g. TrOCR/Tesseract).
+    has_kill_marker = bool(re.search(r"<\s*kill[_\s]*icon\s*>|\bkillicon\b", low))
+    gun_line_type = "Kill" if (has_kill_marker or not KNOCK_KILL_DISTINCTION) else "Knock"
+
+    # Ignore HUD banners/prompts that can contain a gun icon glyph but are
+    # never kill lines (player-join banner, ability-upgrade prompt). Must run
+    # before the gun-icon split below, or these get misclassified as Kill.
+    if re.search(r"\bentered\b", low) or "abilit" in low:
+        return {
+            "raw_line": line,
+            "canonical": canonical,
+            "event_type": None,
+            "attacker": None,
+            "victim": None,
+            "attacker_conf": 0.0,
+            "victim_conf": 0.0,
+        }
+
     # EARLY CHECK: Try to split by gun icon for kill events
     # This handles format: "attacker <gun_icon> victim"
     attacker_part, victim_part = split_by_gun_icon(canonical)
@@ -396,7 +481,7 @@ def parse_killfeed_line(line: str, db, timestamp: Optional[float] = None) -> Dic
             return {
                 "raw_line": line,
                 "canonical": canonical,
-                "event_type": "Kill",
+                "event_type": gun_line_type,
                 "attacker": attacker,
                 "victim": victim,
                 "attacker_conf": attacker_conf,
@@ -691,6 +776,14 @@ def parse_killfeed_line(line: str, db, timestamp: Optional[float] = None) -> Dic
             victim = None
             victim_conf = 0.0
 
+    # Discard self-kills (OCR name-splitting failure)
+    if attacker and victim and attacker.lower() == victim.lower():
+        event_type = None
+        attacker = None
+        victim = None
+        attacker_conf = 0.0
+        victim_conf = 0.0
+
     return {
         "raw_line": line,
         "canonical": canonical,
@@ -716,11 +809,6 @@ def _debug_trace_segment(
 
     if not segment or len(segment) < 3:
         trace.append(f'[{role}]      segment too short (len {len(segment) if segment else 0}) -> None')
-        return None
-
-    if segment.lower().lstrip().startswith('twitch'):
-        trace.append(f"[SKIP]    segment starts with 'twitch' -> entire segment rejected")
-        trace.append(f'[{role}]      {role}_raw = None')
         return None
 
     tokens = re.findall(r'[\[\(]?[A-Za-z0-9_./-]+[\]\)]?', segment)

@@ -1,0 +1,199 @@
+[
+  {
+    "streamer": "B0Fs",
+    "etype": "BleedOut",
+    "line": "xproblem->lve",
+    "len": 22,
+    "minsim": 0.88,
+    "kept": [
+      [
+        19809,
+        "g:\\PycharmProjects\\TesseractApexOCR\\crops\\B0Fs\\20260705_144648_line0_0008_raw.png"
+      ],
+      [
+        19821,
+        "g:\\PycharmProjects\\TesseractApexOCR\\crops\\B0Fs\\20260705_144725_line0_0000_raw.png"
+      ]
+    ],
+    "deleted": [
+      [
+        19829,
+        null
+      ],
+      [
+        19837,
+        "g:\\PycharmProjects\\TesseractApexOCR\\crops\\B0Fs\\20260705_144759_line1_0000_raw.png"
+      ],
+      [
+        19859,
+        "g:\\PycharmProjects\\TesseractApexOCR\\crops\\B0Fs\\20260705_144849_line1_0000_raw.png"
+      ]
+    ]
+  },
+  {
+    "streamer": "B1B2Betins",
+    "etype": "BleedOut",
+    "line": "ane->shirodg2",
+    "len": 16,
+    "minsim": 0.85,
+    "kept": [
+      [
+        16786,
+        "g:\\PycharmProjects\\TesseractApexOCR\\crops\\B1B2Betins\\20260705_115330_line0_4a80_raw.png"
+      ],
+      [
+        16799,
+        "g:\\PycharmProjects\\TesseractApexOCR\\crops\\B1B2Betins\\20260705_115350_line0_8000_raw.png"
+      ]
+    ],
+    "deleted": [
+      [
+        16837,
+        "g:\\PycharmProjects\\TesseractApexOCR\\crops\\B1B2Betins\\20260705_115613_line0_8000_raw.png"
+      ],
+      [
+        16856,
+        "g:\\PycharmProjects\\TesseractApexOCR\\crops\\B1B2Betins\\20260705_115753_line0_c000_raw.png"
+      ],
+      [
+        16867,
+        null
+      ]
+    ]
+  },
+  {
+    "streamer": "Nourryy",
+    "etype": "Kill",
+    "line": "blazeglrvt->konsti",
+    "len": 14,
+    "minsim": 0.83,
+    "kept": [
+      [
+        19003,
+        null
+      ],
+      [
+        19010,
+        null
+      ]
+    ],
+    "deleted": [
+      [
+        19017,
+        null
+      ],
+      [
+        19022,
+        null
+      ],
+      [
+        19030,
+        null
+      ]
+    ]
+  },
+  {
+    "streamer": "Kayrox007",
+    "etype": "Kill",
+    "line": "ttikgt->revenant6070",
+    "len": 4,
+    "minsim": 0.77,
+    "kept": [
+      [
+        28145,
+        null
+      ],
+      [
+        28153,
+        null
+      ]
+    ],
+    "deleted": [
+      [
+        28158,
+        null
+      ],
+      [
+        28192,
+        null
+      ]
+    ]
+  },
+  {
+    "streamer": "Nourryy",
+    "etype": "Kill",
+    "line": "rglrt1->kaijunix",
+    "len": 3,
+    "minsim": 0.79,
+    "kept": [
+      [
+        19162,
+        null
+      ],
+      [
+        19171,
+        null
+      ]
+    ],
+    "deleted": [
+      [
+        19179,
+        null
+      ]
+    ]
+  },
+  {
+    "streamer": "Malachixcii",
+    "etype": "Kill",
+    "line": "wggy.4->punaaniprey",
+    "len": 4,
+    "minsim": 0.82,
+    "kept": [
+      [
+        25729,
+        null
+      ],
+      [
+        25731,
+        null
+      ]
+    ],
+    "deleted": [
+      [
+        25736,
+        null
+      ],
+      [
+        25741,
+        null
+      ]
+    ]
+  },
+  {
+    "streamer": "Matafe_",
+    "etype": "BleedOut",
+    "line": "dannykooa->kona-dilo-da",
+    "len": 4,
+    "minsim": 0.82,
+    "kept": [
+      [
+        2409,
+        "g:\\PycharmProjects\\TesseractApexOCR\\crops\\Matafe_\\20260702_100634_line0_6080_raw.png"
+      ],
+      [
+        2428,
+        "g:\\PycharmProjects\\TesseractApexOCR\\crops\\Matafe_\\20260702_100705_line0_6080_raw.png"
+      ]
+    ],
+    "deleted": [
+      [
+        2439,
+        null
+      ],
+      [
+        2460,
+        null
+      ]
+    ]
+  }
+]

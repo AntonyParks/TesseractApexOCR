@@ -81,11 +81,53 @@ STICKY_CHAIN_MIN_SPAN_SECONDS = 180   # non-ELO: chain must persist this long be
 STICKY_CHAIN_HARD_CAP         = 8     # non-ELO: absolute row cap regardless of span
 STICKY_ELO_EVENT_TYPES = frozenset({"Kill", "BleedOut"})  # strict suppression (these feed ELO)
 
+# ELO types get a TIGHTER cap than the shared STICKY_CHAIN_MAX_ROWS (=4). A same-pair Kill/BleedOut
+# repeat inside the 150s chain window is never a legit second kill (the victim can't respawn that
+# fast), so an ELO chain past this length is a sticky line or an OCR garble re-read -- keep only the
+# first N and suppress the rest. Measured on the 2026-07-09 run (scratch/measure_sticky_lever.py):
+# 4 -> 2 removes 21% of ELO rows and the hit chains are all same-tuple repeats within ~150s (no
+# distinct kills). Set to 2 (not 1) as a conservative buffer: still absorbs a genuinely-fast
+# knock->finish->refinish edge and a single stray re-read before suppressing. Distinct default-name
+# players (axle1456 vs axle8599, ratio 0.5) stay below STICKY_SIM_THRESHOLD=0.82 so they never chain.
+STICKY_ELO_CHAIN_MAX_ROWS = 2
+
 # (streamer, event_type) -> list of clusters, each {"sig","ts","len","id"}; one cluster per
 # distinct persistent line, matched fuzzily so OCR-jittered re-reads share a chain.
 _chain_state: dict = {}
 
 _NORM_RE = re.compile(r"[^a-z0-9]")
+_DIGITS_RE = re.compile(r"\d+")
+_NONDIGIT_RE = re.compile(r"\D+")
+
+# SAME_VICTIM_GUARD tuning: a suppression candidate is a DISTINCT victim (a real multikill, keep it)
+# only if it shares a kept victim's alpha-stem this closely but its digit-suffix differs this much.
+STICKY_GUARD_VIC_SIM  = 0.85   # >= this fuzzy ratio to a kept victim => same victim (sticky, suppress)
+STICKY_GUARD_STEM_SIM = 0.85   # alpha-stem must match a kept victim at least this much to compare
+STICKY_GUARD_DIGIT_SIM = 0.60  # ...and digit-suffix must differ MORE than this to count as distinct
+
+
+def _distinct_default_name_victim(victim: str, kept_vics: list) -> bool:
+    """SAME_VICTIM_GUARD (stem-aware): return True iff `victim` is a genuinely DIFFERENT default-name
+    player than every victim already kept in this sticky chain -- i.e. it does NOT fuzzy-match a kept
+    victim, but DOES share a kept victim's alpha-stem while carrying a clearly different numeric
+    suffix (gibraltar2127 vs gibraltar1619). That pattern is a one-attacker multikill of two default-
+    named players, which the fuzzy chain wrongly merges; keep it. A garble of the same victim (no
+    numeric suffix, or same-ish digits, or a different stem) returns False -> stays sticky-suppressed."""
+    v = _NORM_RE.sub("", (victim or "").lower())
+    vdig = _NONDIGIT_RE.sub("", v)
+    if not vdig:
+        return False                                   # no numeric suffix: can't tell from a garble
+    vstem = _DIGITS_RE.sub("", v)
+    for kv in kept_vics:
+        if SequenceMatcher(None, v, kv).ratio() >= STICKY_GUARD_VIC_SIM:
+            return False                               # matches a kept victim => sticky re-read
+    for kv in kept_vics:
+        kdig = _NONDIGIT_RE.sub("", kv)
+        kstem = _DIGITS_RE.sub("", kv)
+        if kdig and SequenceMatcher(None, vstem, kstem).ratio() >= STICKY_GUARD_STEM_SIM \
+                and SequenceMatcher(None, vdig, kdig).ratio() < STICKY_GUARD_DIGIT_SIM:
+            return True                                # same legend-stem, clearly different number
+    return False
 
 
 def _line_sig(attacker: str, victim: str) -> str:
@@ -302,8 +344,9 @@ def insert_event(
             # bleedout reads of ONE physical line accumulate together (an icon flip or a knock->
             # bleedout can't split one sticky line across two under-cap chains). The per-insert
             # ELO/non-ELO cap branch below still uses THIS row's event_type.
-            from config import STICKY_CHAIN_MERGE_TYPES
+            from config import STICKY_CHAIN_MERGE_TYPES, SAME_VICTIM_GUARD
             sig = _line_sig(attacker, victim)
+            vic_norm = _NORM_RE.sub("", (victim or "").lower())
             group_key = (streamer,) if STICKY_CHAIN_MERGE_TYPES else (streamer, event_type)
             clusters = _chain_state.setdefault(group_key, [])
             # Drop clusters whose last insert is older than the chain gap (chain broken).
@@ -316,7 +359,9 @@ def insert_event(
             )
             if match is None:
                 seed_len, seed_id = _seed_cluster(conn, streamer, event_type, sig, now, STICKY_CHAIN_MERGE_TYPES)
-                match = {"sig": sig, "ts": now, "start": now, "len": seed_len, "id": seed_id}
+                # "vics": distinct victims KEPT in this chain, for the stem-aware multikill guard.
+                match = {"sig": sig, "ts": now, "start": now, "len": seed_len, "id": seed_id,
+                         "vics": [vic_norm]}
                 clusters.append(match)
             else:
                 match["len"] += 1
@@ -333,7 +378,12 @@ def insert_event(
             # sustained past MIN_SPAN, so a short in-fight knock->res->reknock burst survives, with
             # a HARD_CAP backstop for a fast sticky line.
             if event_type in STICKY_ELO_EVENT_TYPES:
-                suppress = match["len"] > STICKY_CHAIN_MAX_ROWS
+                suppress = match["len"] > STICKY_ELO_CHAIN_MAX_ROWS
+                # Stem-aware multikill guard: don't suppress a genuinely different default-name
+                # victim (gibraltar2127 vs gibraltar1619) that the fuzzy chain merged in.
+                if suppress and SAME_VICTIM_GUARD and \
+                        _distinct_default_name_victim(vic_norm, match["vics"]):
+                    suppress = False
             else:
                 span = now - match["start"]
                 suppress = (match["len"] > STICKY_CHAIN_HARD_CAP
@@ -341,6 +391,9 @@ def insert_event(
                                 and span > STICKY_CHAIN_MIN_SPAN_SECONDS))
             if suppress and match["id"] is not None:
                 return match["id"]
+            # This row will be inserted (kept): record its victim for the guard's future comparisons.
+            if vic_norm and vic_norm not in match["vics"]:
+                match["vics"].append(vic_norm)
             active_cluster = match
 
         cursor = conn.execute(_INSERT, (

@@ -1,0 +1,107 @@
+{
+  "generated_at": "2026-07-01 12:11:25",
+  "n_crops": 16,
+  "n_non_blank": 10,
+  "summaries": {
+    "trocr": {
+      "n": 10,
+      "avg_similarity": 0.5724782413390502,
+      "avg_cer": 2.044557562488597,
+      "avg_wer": 1.575,
+      "exact_pct": 0.0,
+      "avg_time_ms": 1020.737974999065,
+      "n_blank": 6,
+      "blank_correct_pct": 0.0
+    },
+    "F1: HSV Color Mask (baseline)": {
+      "n": 10,
+      "avg_similarity": 0.5614214170776128,
+      "avg_cer": 0.6557580733442803,
+      "avg_wer": 1.1,
+      "exact_pct": 10.0,
+      "avg_time_ms": 164.46333123167278,
+      "n_blank": 6,
+      "blank_correct_pct": 83.33333333333333
+    },
+    "F2: Inverted Grayscale": {
+      "n": 10,
+      "avg_similarity": 0.7123806717632458,
+      "avg_cer": 0.6872942893632549,
+      "avg_wer": 1.35,
+      "exact_pct": 0.0,
+      "avg_time_ms": 170.75762502645375,
+      "n_blank": 6,
+      "blank_correct_pct": 100.0
+    },
+    "F3: HSV Value Channel": {
+      "n": 10,
+      "avg_similarity": 0.680442114644901,
+      "avg_cer": 0.710424192665572,
+      "avg_wer": 1.0833333333333333,
+      "exact_pct": 0.0,
+      "avg_time_ms": 170.74778750247788,
+      "n_blank": 6,
+      "blank_correct_pct": 100.0
+    },
+    "F4: Otsu Threshold": {
+      "n": 10,
+      "avg_similarity": 0.6662591837060028,
+      "avg_cer": 0.6641183178252144,
+      "avg_wer": 1.3,
+      "exact_pct": 0.0,
+      "avg_time_ms": 167.97491873876425,
+      "n_blank": 6,
+      "blank_correct_pct": 100.0
+    },
+    "F5: Adaptive Gaussian Threshold": {
+      "n": 10,
+      "avg_similarity": 0.3126740992995017,
+      "avg_cer": 1.1357781426746945,
+      "avg_wer": 1.625,
+      "exact_pct": 0.0,
+      "avg_time_ms": 163.91597499023192,
+      "n_blank": 6,
+      "blank_correct_pct": 100.0
+    },
+    "F6: Bilateral + Otsu": {
+      "n": 10,
+      "avg_similarity": 0.6592149187130827,
+      "avg_cer": 0.6854483670862981,
+      "avg_wer": 1.1166666666666667,
+      "exact_pct": 0.0,
+      "avg_time_ms": 169.65819375036517,
+      "n_blank": 6,
+      "blank_correct_pct": 100.0
+    },
+    "F7: CLAHE Contrast": {
+      "n": 10,
+      "avg_similarity": 0.6427393332425632,
+      "avg_cer": 0.7368751140302865,
+      "avg_wer": 1.3416666666666668,
+      "exact_pct": 0.0,
+      "avg_time_ms": 169.93261875177268,
+      "n_blank": 6,
+      "blank_correct_pct": 100.0
+    },
+    "F8: HSV Mask + Morphological": {
+      "n": 10,
+      "avg_similarity": 0.4424277592475264,
+      "avg_cer": 0.8015804597701149,
+      "avg_wer": 1.1666666666666667,
+      "exact_pct": 0.0,
+      "avg_time_ms": 158.6248749954393,
+      "n_blank": 6,
+      "blank_correct_pct": 66.66666666666667
+    },
+    "EasyOCR (best filter + beamsearch)": {
+      "n": 10,
+      "avg_similarity": 0.6118470864227871,
+      "avg_cer": 0.72418035030104,
+      "avg_wer": 1.4083333333333334,
+      "exact_pct": 0.0,
+      "avg_time_ms": 178.31559373735217,
+      "n_blank": 6,
+      "blank_correct_pct": 100.0
+    }
+  }
+}

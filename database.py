@@ -105,30 +105,19 @@ class PlayerDatabase:
             return
 
         try:
-            with APEX_LEADERBOARD_PATH.open("r", encoding="utf-8") as f:
-                # Expect header: Rank,Player,RP
-                header = f.readline()
+            import csv as _csv
+            with APEX_LEADERBOARD_PATH.open("r", encoding="utf-8", newline="") as f:
+                # Expect header: Rank,Player,RP. Proper CSV parsing -- player names
+                # containing commas are quoted by update_leaderboard.py's writer.
+                reader = _csv.reader(f)
+                next(reader, None)
                 added = 0
 
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    parts = line.split(",")
+                for parts in reader:
                     if len(parts) < 2:
                         continue
 
-                    # Some player names could theoretically contain commas; handle general case
-                    if len(parts) > 3:
-                        rank = parts[0]
-                        rp = parts[-1]
-                        player = ",".join(parts[1:-1])
-                    else:
-                        # Simple case: Rank,Player,RP
-                        rank, player = parts[0], parts[1]
-
-                    player = player.strip()
+                    player = parts[1].strip()
                     if not player or player == "- Empty name -":
                         continue
 
@@ -190,17 +179,24 @@ class PlayerDatabase:
         cutoff = now - self.temporal_window
         best_match = None
         best_ratio = 0.0
+        len1 = len(name)
 
         for canonical_name, recent_list in self.recent_names.items():
-            # Check against canonical name
-            ratio = self.fuzzy_match_ratio(name, canonical_name)
-            if ratio > best_ratio and ratio >= self.temporal_threshold:
-                best_match = canonical_name
-                best_ratio = ratio
+            len2 = len(canonical_name)
+            if max(len1, len2) <= 1.86 * min(len1, len2):
+                # Check against canonical name
+                ratio = self.fuzzy_match_ratio(name, canonical_name)
+                if ratio > best_ratio and ratio >= self.temporal_threshold:
+                    best_match = canonical_name
+                    best_ratio = ratio
 
             # Check against recent variants
             for ts, variant in recent_list:
                 if ts < cutoff:
+                    continue
+
+                len2 = len(variant)
+                if max(len1, len2) > 1.86 * min(len1, len2):
                     continue
 
                 ratio = self.fuzzy_match_ratio(name, variant)
@@ -221,8 +217,8 @@ class PlayerDatabase:
         if not token or len(token) < 3:
             return None
 
-        # Don't process legend+number combinations (anonymized players)
-        if self.is_legend_with_number(token):
+        # Don't process legend+number combinations (anonymized players) or tokens with digits
+        if self.is_legend_with_number(token) or any(c.isdigit() for c in token):
             return None
 
         token_low = token.lower().replace(" ", "")
@@ -234,8 +230,12 @@ class PlayerDatabase:
         # Check for fuzzy match to any legend
         best_legend = None
         best_ratio = 0.0
+        len1 = len(token)
 
         for legend in APEX_LEGENDS_CANONICAL:
+            len2 = len(legend)
+            if max(len1, len2) > 1.5 * min(len1, len2):
+                continue
             ratio = self.fuzzy_match_ratio(token, legend)
             if ratio > best_ratio and ratio > LEGEND_FUZZY_THRESHOLD:
                 best_legend = legend
@@ -274,6 +274,10 @@ class PlayerDatabase:
         if self.is_legend_with_number(token):
             return False
 
+        # If it has any digits, it's a player name variant, not a legend name!
+        if any(c.isdigit() for c in token):
+            return False
+
         token_low = token.lower().replace(" ", "")
 
         # Check exact match
@@ -285,7 +289,11 @@ class PlayerDatabase:
             return True
 
         # Check fuzzy match to any legend
+        len1 = len(token)
         for legend in APEX_LEGENDS_CANONICAL:
+            len2 = len(legend)
+            if max(len1, len2) > 1.5 * min(len1, len2):
+                continue
             if self.fuzzy_match_ratio(token, legend) > LEGEND_FUZZY_THRESHOLD:
                 return True
 
@@ -336,18 +344,37 @@ class PlayerDatabase:
             if canonical_legend:
                 return canonical_legend, 1.0
 
-        # STEP 3: Check against all names in database with standard threshold
+        # STEP 3: Check against all names and historical variants in database
         best_match = None
         best_score = 0.0
+        len1 = len(name)
 
         for canonical_name, entry in self.player_database.items():
             if canonical_name == name:
-                best_match = name
-                best_score = 1.0
-                continue
+                if entry.get("protected", False):
+                    return name, 1.0
+                confidence = self.get_name_confidence_score(canonical_name)
+                return name, 0.6 + 0.4 * confidence
 
-            similarity = self.fuzzy_match_ratio(name, canonical_name)
-            if similarity < FUZZY_MATCH_THRESHOLD:
+            # Check similarity against canonical name
+            similarity = 0.0
+            len2 = len(canonical_name)
+            if max(len1, len2) <= 1.36 * min(len1, len2):
+                similarity = self.fuzzy_match_ratio(name, canonical_name)
+
+            # Also check against all historical variants learned for this canonical name
+            best_variant_similarity = 0.0
+            for variant in entry.get("variants", {}):
+                len2 = len(variant)
+                if max(len1, len2) <= 1.36 * min(len1, len2):
+                    var_similarity = self.fuzzy_match_ratio(name, variant)
+                    if var_similarity > best_variant_similarity:
+                        best_variant_similarity = var_similarity
+
+            # Pick the higher similarity of the canonical name or any variant
+            match_similarity = max(similarity, best_variant_similarity)
+
+            if match_similarity < FUZZY_MATCH_THRESHOLD:
                 continue
 
             confidence = self.get_name_confidence_score(canonical_name)
@@ -356,11 +383,11 @@ class PlayerDatabase:
 
             # Weighting: prefer pro players, then legends, then normal names
             if is_pro:
-                combined_score = 0.8 * similarity + 0.2 * confidence
+                combined_score = 0.8 * match_similarity + 0.2 * confidence
             elif is_protected:
-                combined_score = 0.4 * similarity + 0.6 * 1.0
+                combined_score = 0.4 * match_similarity + 0.6 * 1.0
             else:
-                combined_score = 0.6 * similarity + 0.4 * confidence
+                combined_score = 0.6 * match_similarity + 0.4 * confidence
 
             if combined_score > best_score:
                 best_match = canonical_name
@@ -472,8 +499,28 @@ class PlayerDatabase:
 
         now = timestamp if timestamp else time.time()
 
-        self.add_name_observation(name, now)
+        # Check manual player name corrections first
+        from config import PLAYER_NAME_CORRECTIONS
+        name_low = name.lower()
+        if name_low in PLAYER_NAME_CORRECTIONS:
+            corrected = PLAYER_NAME_CORRECTIONS[name_low]
+            # Ensure the corrected canonical name is added to the database
+            if corrected not in self.player_database:
+                self.player_database[corrected] = {
+                    "variants": {},
+                    "total_seen": 0,
+                    "last_seen": now,
+                    "protected": True
+                }
+            entry = self.player_database[corrected]
+            entry["variants"][name] = entry["variants"].get(name, 0) + 1
+            entry["total_seen"] += 1
+            entry["last_seen"] = now
+            self.add_to_recent(corrected, name, now)
+            return corrected, 1.0
+
         canonical, confidence = self.find_best_canonical_match(name, now)
+        self.add_name_observation(name, now)
         return canonical, round(confidence, 4)
 
     def print_summary(self):

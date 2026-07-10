@@ -20,7 +20,11 @@ calibration_cache.json
 # Image & Dataset crops
 crops/
 crops_noise/
+wordlevel_crops/
+test_crops/
 labels/
+debug_frame.png
+debug_bmap.png
 colab_bundle.zip
 easyocr_lmdb_dataset_ready/
 easyocr_lmdb_dataset_ready.zip
@@ -32,3 +36,21 @@ models/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Regenerable training datasets / LMDB bundles
+easyocr_dataset/
+easyocr_dataset_v2/
+easyocr_dataset_v3/
+easyocr_lmdb_*
+
+# Rolling DB/CSV/JSON backup snapshots (killfeed.db.bak_*, *.csv.bak_*, etc.)
+*.bak_*
+
+# Run logs & debug image/array dumps
+logs/
+scratch/*.png
+scratch/*.npy
+scratch/*.jpg
+
+# Frontend build cache
+*.tsbuildinfo

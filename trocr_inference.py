@@ -37,15 +37,15 @@ def _load_model(model_path: Path):
         print("[TrOCR] Model loaded.")
 
 
-def ocr_with_trocr(processed_img: np.ndarray, gun_icon_positions: list[int], model_path: Path) -> tuple[str, float]:
-    """Run TrOCR on a preprocessed killfeed strip.
+def ocr_with_trocr(processed_img: np.ndarray | list[np.ndarray], gun_icon_positions: list[int], model_path: Path) -> tuple[str, float]:
+    """Run TrOCR on a preprocessed killfeed strip (or list of strips for parallel batching).
 
     The model is trained to output <GUN_ICON> tokens directly — no heuristic
     reinsertion needed. gun_icon_positions is accepted for API compatibility
     but not used.
 
     Args:
-        processed_img:      Preprocessed grayscale image (uint8).
+        processed_img:      Preprocessed image (uint8), or list of preprocessed images.
         gun_icon_positions: Unused — kept for drop-in compatibility with ocr_with_positions().
         model_path:         Path to saved TrOCR model directory.
 
@@ -57,11 +57,22 @@ def ocr_with_trocr(processed_img: np.ndarray, gun_icon_positions: list[int], mod
 
     _load_model(model_path)
 
-    rgb = cv2.cvtColor(processed_img, cv2.COLOR_GRAY2RGB)
-    pil_img = Image.fromarray(rgb)
+    # Convert single image to a list of one image for uniform processing
+    is_list = isinstance(processed_img, list)
+    images_list = processed_img if is_list else [processed_img]
+
+    pil_imgs = []
+    for img in images_list:
+        if img.ndim == 2:
+            rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+            pil_imgs.append(Image.fromarray(rgb))
+        else:
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            pil_imgs.append(Image.fromarray(rgb))
 
     device = next(_model.parameters()).device
-    pixel_values = _processor(images=pil_img, return_tensors="pt").pixel_values.to(device)
+    # Batch process PIL images in parallel
+    pixel_values = _processor(images=pil_imgs, return_tensors="pt").pixel_values.to(device)
 
     with torch.no_grad():
         output = _model.generate(
@@ -71,25 +82,48 @@ def ocr_with_trocr(processed_img: np.ndarray, gun_icon_positions: list[int], mod
             output_scores=True,
         )
 
-    text = _processor.batch_decode(output.sequences, skip_special_tokens=True)[0].strip()
+    # Decode all transcriptions in parallel
+    decoded_texts = _processor.batch_decode(output.sequences, skip_special_tokens=True)
+    decoded_texts = [text.strip() for text in decoded_texts]
 
-    # Compute geometric mean of per-token max-softmax probability as confidence.
-    scores = output.scores  # tuple of (batch, vocab_size) per generated token
-    if scores:
-        log_sum = 0.0
-        for step in scores:
-            probs = torch.softmax(step, dim=-1)
-            max_prob = float(probs.max(dim=-1).values[0])
-            log_sum += math.log(max_prob) if max_prob > 0 else -10.0
-        confidence = math.exp(log_sum / len(scores))
+    # Compute confidence for each batch item
+    batch_size = len(images_list)
+    confidences = [0.0] * batch_size
+    log_sums = [0.0] * batch_size
+
+    # output.scores is a tuple of shape (num_tokens) where each element is a tensor (batch_size, vocab)
+    if output.scores:
+        num_steps = len(output.scores)
+        for step in output.scores:
+            probs = torch.softmax(step, dim=-1) # (batch_size, vocab_size)
+            max_probs = probs.max(dim=-1).values # (batch_size,)
+            for idx in range(batch_size):
+                prob_val = float(max_probs[idx])
+                log_sums[idx] += math.log(prob_val) if prob_val > 0 else -10.0
+        
+        for idx in range(batch_size):
+            confidences[idx] = math.exp(log_sums[idx] / num_steps)
     else:
-        confidence = 1.0
+        confidences = [1.0] * batch_size
 
-    # Reject obviously garbage output early (high special-char density).
-    gun_icon_stripped = text.replace("<GUN_ICON>", "")
-    if gun_icon_stripped:
-        alpha_ratio = sum(c.isalnum() or c in " -_." for c in gun_icon_stripped) / len(gun_icon_stripped)
-        if alpha_ratio < 0.5:
-            return "", 0.0
+    # Filter outputs (reject garbage)
+    candidates = []
+    for text, conf in zip(decoded_texts, confidences):
+        # Reject obviously garbage output early (high special-char density).
+        gun_icon_stripped = text.replace("<GUN_ICON>", "")
+        if gun_icon_stripped:
+            alpha_ratio = sum(c.isalnum() or c in " -_." for c in gun_icon_stripped) / len(gun_icon_stripped)
+            if alpha_ratio < 0.5:
+                candidates.append(("", 0.0))
+                continue
+        candidates.append((text, conf))
 
-    return text, confidence
+    # Select the candidate with the highest confidence
+    # (defaulting to the first one if confidence is equal)
+    best_text, best_conf = candidates[0]
+    for text, conf in candidates[1:]:
+        if conf > best_conf:
+            best_text = text
+            best_conf = conf
+
+    return best_text, best_conf

@@ -1,27 +1,32 @@
-"""Group killfeed_log.csv Kill events into match sessions.
+"""Group killfeed Kill events into match sessions.
 
+Supports both CSV (legacy) and SQLite (primary) sources.
 A gap of >GAP_SECONDS between consecutive Kill events from the same streamer
 signals a new match. Within a match, kill_order is assigned chronologically.
-
-Knock vs kill handling:
-    The Apex killfeed shows both knocks and eliminations with identical OCR text.
-    A player can appear as victim twice (knocked at order 3, eliminated at order 9).
-    We resolve this by:
-    - Using the LAST victim appearance as the true elimination order.
-    - If a player appears as attacker AFTER an earlier victim entry, they were revived;
-      that earlier victim entry is discarded.
 """
 
 import csv
+import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 from pathlib import Path
+from statistics import median
 from typing import Optional
 
-GAP_SECONDS = 300       # 5 minutes between matches
+GAP_SECONDS = 90        # 1.5 minutes between matches
 MIN_KILLS = 3           # discard matches shorter than this
 CONF_FLOOR = 0.5        # minimum victim_conf to participate in ELO
 LEGACY_CONF = 0.5       # assigned to rows without a confidence column
+
+# Cross-streamer merge: two streamers in the same lobby each produce a match record of the
+# same real game (their feeds overlap wherever the same kills were visible to both). Merge
+# criteria below; confirmed real example: Zuni & Matafe_ 2026-07-02 09:38-09:44, same kills
+# in both feeds with 0-30s skew from differing Twitch delays.
+MERGE_MAX_SKEW_SECONDS = 60    # max timestamp difference for two events to be "the same kill"
+MERGE_MIN_SHARED = 3           # shared kills required before two matches merge
+MERGE_NAME_SIM = 0.75          # SequenceMatcher threshold on "attacker|victim" (OCR garbles)
+MERGE_WINDOW_SLOP = 120        # extra seconds of window overlap tolerance
 
 
 @dataclass
@@ -41,6 +46,13 @@ class Match:
     start_time: datetime
     end_time: datetime
     kills: list[KillEvent] = field(default_factory=list)
+    # match_ids of other streamers' match records merged into this one (same real lobby)
+    merged_from: list[str] = field(default_factory=list)
+    # Corroborating events (Knock, KillUnverified) within this match's time window. Used
+    # ONLY as extra evidence when fingerprinting whether two streamers watched the same
+    # lobby -- never fed into ELO and never persisted. Knocks are ideal for this: both
+    # streams render the same knock lines, and there are far more of them than finishes.
+    fingerprints: list[KillEvent] = field(default_factory=list)
 
     @property
     def kill_count(self) -> int:
@@ -118,6 +130,45 @@ def _compute_last_alive_order(kills: list[KillEvent]) -> dict[str, int]:
                 last_alive.get(kill.attacker, 0), kill.kill_order
             )
     return last_alive
+def _split_chunk_recursive(kills_chunk: list[tuple[datetime, dict]], max_players: int = 62, max_duration: float = 1500.0) -> list[list[tuple[datetime, dict]]]:
+    """Recursively split a grouped kills chunk if it exceeds unique player or duration bounds."""
+    if len(kills_chunk) < 2:
+        return [kills_chunk]
+
+    # Count unique players observed
+    seen_players = set()
+    for _, d in kills_chunk:
+        if d.get("attacker"):
+            seen_players.add(d["attacker"])
+        if d.get("victim"):
+            seen_players.add(d["victim"])
+
+    duration_sec = (kills_chunk[-1][0] - kills_chunk[0][0]).total_seconds()
+
+    # If within bounds, no further splitting needed
+    if len(seen_players) < max_players and duration_sec < max_duration:
+        return [kills_chunk]
+
+    # Find the largest internal time gap
+    max_gap = -1.0
+    split_idx = -1
+    for i in range(len(kills_chunk) - 1):
+        gap = (kills_chunk[i + 1][0] - kills_chunk[i][0]).total_seconds()
+        if gap > max_gap:
+            max_gap = gap
+            split_idx = i + 1
+
+    if split_idx == -1:
+        return [kills_chunk]
+
+    # Split into left and right sub-chunks and recurse
+    left = kills_chunk[:split_idx]
+    right = kills_chunk[split_idx:]
+    
+    return (
+        _split_chunk_recursive(left, max_players, max_duration) +
+        _split_chunk_recursive(right, max_players, max_duration)
+    )
 
 
 def detect_matches(
@@ -141,15 +192,17 @@ def detect_matches(
         has_conf = "attacker_conf" in fieldnames
 
         for row in reader:
-            if (row.get("event_type") or "").strip() != "Kill":
+            etype = (row.get("event_type") or "").strip()
+            attacker = row.get("attacker") or None
+            victim = row.get("victim") or None
+            # BleedOut = kill-equivalent, both-name rows only (see the DB loader's comment).
+            if etype != "Kill" and not (etype == "BleedOut" and attacker and victim):
                 continue
 
             ts = _parse_ts(row.get("timestamp", ""))
             if not ts:
                 continue
 
-            attacker = row.get("attacker") or None
-            victim = row.get("victim") or None
             if not attacker and not victim:
                 continue
 
@@ -184,28 +237,35 @@ def detect_matches(
         def _flush(kills_chunk: list[tuple[datetime, dict]]) -> None:
             if len(kills_chunk) < min_kills:
                 return
-            start = kills_chunk[0][0]
-            end = kills_chunk[-1][0]
-            match_id = _make_match_id(streamer, start)
+            
+            # Apply recursive stitch splitter
+            split_chunks = _split_chunk_recursive(kills_chunk, max_players=62, max_duration=1500.0)
+            
+            for chunk in split_chunks:
+                if len(chunk) < min_kills:
+                    continue
+                start = chunk[0][0]
+                end = chunk[-1][0]
+                match_id = _make_match_id(streamer, start)
 
-            kill_events = []
-            for order, (ts, data) in enumerate(kills_chunk, start=1):
-                kill_events.append(KillEvent(
-                    timestamp=ts,
-                    attacker=data["attacker"],
-                    victim=data["victim"],
-                    attacker_conf=data["attacker_conf"],
-                    victim_conf=data["victim_conf"],
-                    kill_order=order,
+                kill_events = []
+                for order, (ts, data) in enumerate(chunk, start=1):
+                    kill_events.append(KillEvent(
+                        timestamp=ts,
+                        attacker=data["attacker"],
+                        victim=data["victim"],
+                        attacker_conf=data["attacker_conf"],
+                        victim_conf=data["victim_conf"],
+                        kill_order=order,
+                    ))
+
+                matches.append(Match(
+                    match_id=match_id,
+                    streamer=streamer,
+                    start_time=start,
+                    end_time=end,
+                    kills=kill_events,
                 ))
-
-            matches.append(Match(
-                match_id=match_id,
-                streamer=streamer,
-                start_time=start,
-                end_time=end,
-                kills=kill_events,
-            ))
 
         for ts, data in events:
             if current_kills:
@@ -232,27 +292,316 @@ def get_player_survival(match: Match) -> tuple[dict[str, int], dict[str, int]]:
     return elimination_order, last_alive_order
 
 
+def detect_matches_from_db(
+    db_path: Path,
+    gap_seconds: int = GAP_SECONDS,
+    min_kills: int = MIN_KILLS,
+) -> list[Match]:
+    """Read Kill events from killfeed.db and group into match sessions.
+
+    Only reads source='trocr' rows so Gemini corrections aren't double-counted.
+    Returns a list of Match objects sorted chronologically by start_time.
+    """
+    if not db_path.exists():
+        return []
+
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    # BleedOut lines are kill-equivalents: the game credits the bleed-out death to the
+    # knocker, rendered as "Knocker [Bleed Out] Victim". Only both-name rows are included --
+    # single-sided BleedOut rows are ambiguous (a truncated read, or an unattributed
+    # ring/fall death where the lone name is actually the VICTIM sitting in the attacker
+    # field), and crediting those would hand kills to dying players.
+    rows = conn.execute(
+        """
+        SELECT streamer, timestamp, attacker, victim, attacker_conf, victim_conf
+        FROM events
+        WHERE (event_type = 'Kill'
+               OR (event_type = 'BleedOut' AND attacker != '' AND victim != ''))
+          AND source IN ('trocr', 'easyocr')
+        ORDER BY timestamp ASC
+        """
+    ).fetchall()
+
+    # Corroborating events for cross-streamer lobby fingerprinting only (never ELO):
+    # knocks and unverified kills render identically on every stream watching the lobby,
+    # and are far more numerous than confirmed finishes.
+    fp_rows = conn.execute(
+        """
+        SELECT streamer, timestamp, attacker, victim
+        FROM events
+        WHERE event_type IN ('Knock', 'KillUnverified')
+          AND attacker != '' AND victim != ''
+          AND source IN ('trocr', 'easyocr')
+        ORDER BY timestamp ASC
+        """
+    ).fetchall()
+    conn.close()
+
+    by_streamer: dict[str, list[tuple[datetime, dict]]] = {}
+    for (streamer, ts_str, attacker, victim, a_conf, v_conf) in rows:
+        ts = _parse_ts(ts_str)
+        if not ts:
+            continue
+        if not attacker and not victim:
+            continue
+        try:
+            a_conf = float(a_conf or LEGACY_CONF)
+        except (TypeError, ValueError):
+            a_conf = LEGACY_CONF
+        try:
+            v_conf = float(v_conf or LEGACY_CONF)
+        except (TypeError, ValueError):
+            v_conf = LEGACY_CONF
+        by_streamer.setdefault(streamer, []).append((ts, {
+            "attacker": attacker or None,
+            "victim":   victim   or None,
+            "attacker_conf": a_conf,
+            "victim_conf":   v_conf,
+        }))
+
+    # Glue events join the same per-streamer stream, flagged with '_fp'. They hold match
+    # windows together (confirmed finishes are sparse -- 90s without a FINISH is common in
+    # a real game, knocks fill the gaps) and serve as cross-streamer fingerprints, but are
+    # never part of Match.kills / ELO.
+    for (streamer, ts_str, attacker, victim) in fp_rows:
+        ts = _parse_ts(ts_str)
+        if not ts:
+            continue
+        by_streamer.setdefault(streamer, []).append((ts, {
+            "attacker": attacker or None,
+            "victim":   victim   or None,
+            "attacker_conf": LEGACY_CONF,
+            "victim_conf":   LEGACY_CONF,
+            "_fp": True,
+        }))
+
+    return _build_matches(by_streamer, gap_seconds, min_kills)
+
+
+def _build_matches(
+    by_streamer: dict,
+    gap_seconds: int,
+    min_kills: int,
+) -> list[Match]:
+    """Shared match-building logic from a by_streamer dict.
+
+    Entries flagged with '_fp' (knocks, unverified kills) participate in gap grouping and
+    the stitch splitter -- they define the game's temporal continuity -- but end up in
+    Match.fingerprints rather than Match.kills, so they never touch ELO.
+
+    The min_kills floor is applied AFTER cross-streamer merging: a thin single-stream view
+    of a lobby (1-2 confirmed finishes) survives if another streamer's view of the same
+    lobby corroborates and merges with it; standalone fragments below the floor are still
+    discarded.
+    """
+    matches: list[Match] = []
+
+    for streamer, events in by_streamer.items():
+        events.sort(key=lambda x: x[0])
+        current_events: list[tuple[datetime, dict]] = []
+
+        def _flush(event_chunk: list[tuple[datetime, dict]]) -> None:
+            # Apply recursive stitch splitter
+            split_chunks = _split_chunk_recursive(event_chunk, max_players=62, max_duration=1500.0)
+
+            for chunk in split_chunks:
+                kill_entries = [(ts, d) for ts, d in chunk if not d.get("_fp")]
+                if not kill_entries:
+                    continue
+                start = kill_entries[0][0]
+                end   = kill_entries[-1][0]
+                match_id = _make_match_id(streamer, start)
+                kill_events = [
+                    KillEvent(
+                        timestamp=ts, attacker=d["attacker"], victim=d["victim"],
+                        attacker_conf=d["attacker_conf"], victim_conf=d["victim_conf"],
+                        kill_order=order,
+                    )
+                    for order, (ts, d) in enumerate(kill_entries, start=1)
+                ]
+                fingerprints = [
+                    KillEvent(
+                        timestamp=ts, attacker=d["attacker"], victim=d["victim"],
+                        attacker_conf=d["attacker_conf"], victim_conf=d["victim_conf"],
+                    )
+                    for ts, d in chunk if d.get("_fp")
+                ]
+                matches.append(Match(
+                    match_id=match_id, streamer=streamer,
+                    start_time=start, end_time=end, kills=kill_events,
+                    fingerprints=fingerprints,
+                ))
+
+        for ts, data in events:
+            if current_events and (ts - current_events[-1][0]).total_seconds() > gap_seconds:
+                _flush(current_events)
+                current_events = []
+            current_events.append((ts, data))
+        _flush(current_events)
+
+    matches = merge_cross_streamer_matches(matches)
+    matches = [m for m in matches if m.kill_count >= min_kills]
+    matches.sort(key=lambda m: m.start_time)
+    return matches
+
+
+# ---------------------------------------------------------------------------
+# Cross-streamer merging (same real lobby observed by multiple streamers)
+# ---------------------------------------------------------------------------
+
+def _shared_event_pairs(events1: list[KillEvent], events2: list[KillEvent]) -> list[tuple[KillEvent, KillEvent]]:
+    """Greedily pair up events that appear in BOTH lists: same (attacker, victim) up to
+    OCR garbling (fuzzy 'attacker|victim' match) within MERGE_MAX_SKEW_SECONDS."""
+    pairs = []
+    used = set()
+    for k1 in events1:
+        if not (k1.attacker and k1.victim):
+            continue
+        sig1 = f"{k1.attacker}|{k1.victim}".lower()
+        best_j, best_ratio = None, 0.0
+        for j, k2 in enumerate(events2):
+            if j in used or not (k2.attacker and k2.victim):
+                continue
+            if abs((k1.timestamp - k2.timestamp).total_seconds()) > MERGE_MAX_SKEW_SECONDS:
+                continue
+            ratio = SequenceMatcher(None, sig1, f"{k2.attacker}|{k2.victim}".lower()).ratio()
+            if ratio >= MERGE_NAME_SIM and ratio > best_ratio:
+                best_j, best_ratio = j, ratio
+        if best_j is not None:
+            pairs.append((k1, events2[best_j]))
+            used.add(best_j)
+    return pairs
+
+
+def _merge_pair(primary: Match, secondary: Match,
+                all_pairs: list[tuple[KillEvent, KillEvent]],
+                kill_pairs: list[tuple[KillEvent, KillEvent]]) -> Match:
+    """Merge secondary's view of the lobby into primary's.
+
+    The two streams disagree on wall-clock time (Twitch delay differs per stream), so the
+    median offset over ALL shared events (kills + fingerprints) is used to shift the
+    secondary's unshared events onto the primary's clock before interleaving. Shared kills
+    keep the primary's copy but take the max confidence per side (observed by two
+    independent streams = corroborated).
+    """
+    skew = median((k2.timestamp - k1.timestamp).total_seconds() for k1, k2 in all_pairs)
+    matched_secondary = {id(k2) for _, k2 in kill_pairs}
+
+    merged_kills = []
+    conf_boost = {id(k1): k2 for k1, k2 in kill_pairs}
+    for k in primary.kills:
+        other = conf_boost.get(id(k))
+        if other is not None:
+            k = KillEvent(
+                timestamp=k.timestamp, attacker=k.attacker, victim=k.victim,
+                attacker_conf=max(k.attacker_conf, other.attacker_conf),
+                victim_conf=max(k.victim_conf, other.victim_conf),
+            )
+        merged_kills.append(k)
+    for k in secondary.kills:
+        if id(k) in matched_secondary:
+            continue
+        merged_kills.append(KillEvent(
+            timestamp=k.timestamp - timedelta(seconds=skew),
+            attacker=k.attacker, victim=k.victim,
+            attacker_conf=k.attacker_conf, victim_conf=k.victim_conf,
+        ))
+
+    merged_kills.sort(key=lambda k: k.timestamp)
+    for order, k in enumerate(merged_kills, start=1):
+        k.kill_order = order
+
+    merged_fp = primary.fingerprints + [
+        KillEvent(timestamp=k.timestamp - timedelta(seconds=skew),
+                  attacker=k.attacker, victim=k.victim,
+                  attacker_conf=k.attacker_conf, victim_conf=k.victim_conf)
+        for k in secondary.fingerprints
+    ]
+
+    return Match(
+        match_id=primary.match_id,
+        streamer=primary.streamer,
+        start_time=merged_kills[0].timestamp,
+        end_time=merged_kills[-1].timestamp,
+        kills=merged_kills,
+        merged_from=primary.merged_from + secondary.merged_from + [secondary.match_id],
+        fingerprints=merged_fp,
+    )
+
+
+def merge_cross_streamer_matches(matches: list[Match]) -> list[Match]:
+    """Collapse match records that are the same real lobby seen from different streams.
+
+    Without this, a lobby watched by two tracked streamers produces two match records and
+    every shared kill is rated twice. Merging also widens lobby coverage: each stream only
+    shows kills near its player, so the union observes more of the (up to 60) participants.
+    Transitive merges (A~B, B~C) are handled by rescanning until stable.
+    """
+    matches = list(matches)
+    slop = timedelta(seconds=MERGE_WINDOW_SLOP)
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(matches)):
+            for j in range(i + 1, len(matches)):
+                a, b = matches[i], matches[j]
+                if a.streamer == b.streamer:
+                    continue
+                if a.start_time - slop > b.end_time or b.start_time - slop > a.end_time:
+                    continue
+                primary, secondary = (a, b) if (a.kill_count, b.start_time) >= (b.kill_count, a.start_time) else (b, a)
+                # Fingerprint on kills AND corroborating events (knocks etc.) -- the same
+                # lobby is identifiable long before both streams have 3 shared FINISHES.
+                all_pairs = _shared_event_pairs(
+                    primary.kills + primary.fingerprints,
+                    secondary.kills + secondary.fingerprints,
+                )
+                if len(all_pairs) < MERGE_MIN_SHARED:
+                    continue
+                kill_pairs = _shared_event_pairs(primary.kills, secondary.kills)
+                merged = _merge_pair(primary, secondary, all_pairs, kill_pairs)
+                print(f"  [merge] {secondary.match_id} ({secondary.kill_count} kills) merged into "
+                      f"{merged.match_id} -> {merged.kill_count} kills, "
+                      f"{merged.players_observed} players "
+                      f"({len(all_pairs)} shared events, {len(kill_pairs)} shared kills)")
+                matches[i] = merged
+                del matches[j]
+                changed = True
+                break
+            if changed:
+                break
+    return matches
+
+
 if __name__ == "__main__":
     import argparse
-    from config import LOG_PATH
+    from config import KILLFEED_DB_PATH, LOG_PATH
 
-    parser = argparse.ArgumentParser(description="Detect match sessions from killfeed_log.csv")
-    parser.add_argument("--gap", type=int, default=GAP_SECONDS, help="Gap in seconds between matches")
-    parser.add_argument("--min-kills", type=int, default=MIN_KILLS, help="Minimum kills per match")
+    parser = argparse.ArgumentParser(description="Detect match sessions from killfeed DB / CSV")
+    parser.add_argument("--gap",       type=int, default=GAP_SECONDS, help="Gap in seconds between matches")
+    parser.add_argument("--min-kills", type=int, default=MIN_KILLS,   help="Minimum kills per match")
+    parser.add_argument("--csv",       action="store_true",            help="Force CSV source (legacy)")
     args = parser.parse_args()
 
-    matches = detect_matches(LOG_PATH, gap_seconds=args.gap, min_kills=args.min_kills)
-    print(f"\nDetected {len(matches)} matches from {LOG_PATH}\n")
+    if not args.csv and KILLFEED_DB_PATH.exists():
+        print(f"Reading from SQLite: {KILLFEED_DB_PATH}")
+        matches = detect_matches_from_db(KILLFEED_DB_PATH, gap_seconds=args.gap, min_kills=args.min_kills)
+        src = KILLFEED_DB_PATH
+    else:
+        print(f"Reading from CSV: {LOG_PATH}")
+        matches = detect_matches(LOG_PATH, gap_seconds=args.gap, min_kills=args.min_kills)
+        src = LOG_PATH
 
+    print(f"\nDetected {len(matches)} matches from {src}\n")
     total_players = 0
     for m in matches:
         elim, _ = get_player_survival(m)
         print(
             f"  [{m.match_id}] {m.streamer:15s} | "
-            f"{m.start_time.strftime('%Y-%m-%d %H:%M')} → {m.end_time.strftime('%H:%M')} | "
+            f"{m.start_time.strftime('%Y-%m-%d %H:%M')} -> {m.end_time.strftime('%H:%M')} | "
             f"{m.kill_count:3d} kills | {m.players_observed:3d} players | "
             f"{len(elim):3d} with definitive placement"
         )
         total_players += m.players_observed
-
     print(f"\nTotal player appearances: {total_players}")
+

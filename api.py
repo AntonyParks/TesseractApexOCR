@@ -19,10 +19,10 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 import elo_db
+import db_log
 from config import *
 
 # Allow env-var overrides for paths and server settings
-_LOG_PATH  = Path(os.environ.get("LOG_PATH",  str(LOG_PATH)))
 _API_HOST  = os.environ.get("API_HOST", "0.0.0.0")
 _API_PORT  = int(os.environ.get("API_PORT", "8080"))
 
@@ -34,28 +34,6 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["*"],
 )
-
-
-# ---------------------------------------------------------------------------
-# CSV cache — re-reads only when file modification time changes
-# ---------------------------------------------------------------------------
-
-_cache_lock   = threading.Lock()
-_cache_events: list[dict] = []
-_cache_mtime:  float = 0.0
-
-
-def _load_events() -> list[dict]:
-    global _cache_events, _cache_mtime
-    if not _LOG_PATH.exists():
-        return []
-    mtime = _LOG_PATH.stat().st_mtime
-    with _cache_lock:
-        if mtime != _cache_mtime:
-            with _LOG_PATH.open(encoding="utf-8") as f:
-                _cache_events = list(csv.DictReader(f))
-            _cache_mtime = mtime
-        return list(_cache_events)
 
 
 # ---------------------------------------------------------------------------
@@ -130,11 +108,11 @@ def _filter_events(
 
 @app.get("/health")
 def health():
-    events = _load_events()
+    total = db_log.count_events()
     return {
         "status": "ok",
-        "log_exists": _LOG_PATH.exists(),
-        "total_events": len(events),
+        "db_exists": KILLFEED_DB_PATH.exists(),
+        "total_events": total,
     }
 
 
@@ -146,14 +124,19 @@ def get_events(
     victim: Optional[str] = Query(None),
     from_ts: Optional[str] = Query(None, description="ISO datetime, e.g. 2026-03-04T20:00:00"),
     to_ts: Optional[str] = Query(None),
+    source: Optional[str] = Query(None, description="'trocr' or 'gemini'"),
     limit: int = Query(100, ge=1, le=10000),
     offset: int = Query(0, ge=0),
 ):
-    events = _load_events()
-    filtered = _filter_events(events, streamer, event_type, attacker, victim, from_ts, to_ts)
-    total = len(filtered)
-    page = filtered[offset: offset + limit]
-    return {"total": total, "offset": offset, "limit": limit, "events": page}
+    events = db_log.query_events(
+        streamer=streamer, event_type=event_type,
+        attacker=attacker, victim=victim,
+        from_ts=from_ts, to_ts=to_ts,
+        source=source,
+        limit=limit, offset=offset,
+    )
+    total = db_log.count_events(streamer=streamer, event_type=event_type, source=source)
+    return {"total": total, "offset": offset, "limit": limit, "events": events}
 
 
 @app.get("/events/latest")
@@ -161,10 +144,10 @@ def get_latest_events(
     streamer: Optional[str] = Query(None),
     n: int = Query(10, ge=1, le=500),
 ):
-    events = _load_events()
-    if streamer:
-        events = [e for e in events if e.get("streamer", "").lower() == streamer.lower()]
-    return {"events": events[-n:]}
+    events = db_log.query_events(
+        streamer=streamer, order_desc=True, limit=n
+    )
+    return {"events": list(reversed(events))}
 
 
 @app.get("/events/kills")
@@ -172,46 +155,41 @@ def get_kills(
     streamer: Optional[str] = Query(None),
     attacker: Optional[str] = Query(None),
     victim: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=10000),
     offset: int = Query(0, ge=0),
 ):
-    events = _load_events()
-    kills = [e for e in events if e.get("event_type", "").lower() == "kill"]
-    filtered = _filter_events(kills, streamer, None, attacker, victim, None, None)
-    total = len(filtered)
-    page = filtered[offset: offset + limit]
-    return {"total": total, "offset": offset, "limit": limit, "events": page}
+    events = db_log.query_events(
+        streamer=streamer, event_type="Kill",
+        attacker=attacker, victim=victim,
+        source=source,
+        limit=limit, offset=offset,
+    )
+    total = db_log.count_events(streamer=streamer, event_type="Kill", source=source)
+    return {"total": total, "offset": offset, "limit": limit, "events": events}
 
 
 @app.get("/stats/streamers")
 def stats_streamers():
-    events = _load_events()
-    counts: dict[str, int] = {}
-    for e in events:
-        s = e.get("streamer", "unknown")
-        counts[s] = counts.get(s, 0) + 1
-    return {"streamers": [{"streamer": k, "event_count": v} for k, v in sorted(counts.items())]}
+    import sqlite3
+    conn = sqlite3.connect(str(KILLFEED_DB_PATH), check_same_thread=False)
+    rows = conn.execute(
+        "SELECT streamer, COUNT(*) as event_count FROM events GROUP BY streamer ORDER BY streamer"
+    ).fetchall()
+    conn.close()
+    return {"streamers": [{"streamer": r[0], "event_count": r[1]} for r in rows]}
 
 
 @app.get("/stats/players")
 def stats_players(streamer: Optional[str] = Query(None)):
-    events = _load_events()
-    if streamer:
-        events = [e for e in events if e.get("streamer", "").lower() == streamer.lower()]
-
-    kill_counts: dict[str, int] = {}
-    death_counts: dict[str, int] = {}
-
-    for e in events:
-        if e.get("event_type") != "kill":
-            continue
-        atk = e.get("attacker", "")
-        vic = e.get("victim", "")
-        if atk:
-            kill_counts[atk] = kill_counts.get(atk, 0) + 1
-        if vic:
-            death_counts[vic] = death_counts.get(vic, 0) + 1
-
+    import sqlite3
+    conn = sqlite3.connect(str(KILLFEED_DB_PATH), check_same_thread=False)
+    where = "WHERE event_type='Kill'" + (f" AND LOWER(streamer)=LOWER('{streamer}')" if streamer else "")
+    kill_rows  = conn.execute(f"SELECT attacker, COUNT(*) FROM events {where} GROUP BY attacker").fetchall()
+    death_rows = conn.execute(f"SELECT victim,   COUNT(*) FROM events {where} GROUP BY victim").fetchall()
+    conn.close()
+    kill_counts  = {r[0]: r[1] for r in kill_rows  if r[0]}
+    death_counts = {r[0]: r[1] for r in death_rows if r[0]}
     all_players = set(kill_counts) | set(death_counts)
     rows = [
         {"player": p, "kills": kill_counts.get(p, 0), "deaths": death_counts.get(p, 0)}
@@ -223,20 +201,36 @@ def stats_players(streamer: Optional[str] = Query(None)):
 
 @app.get("/stats/victims")
 def stats_victims(streamer: Optional[str] = Query(None)):
-    events = _load_events()
-    if streamer:
-        events = [e for e in events if e.get("streamer", "").lower() == streamer.lower()]
+    import sqlite3
+    conn = sqlite3.connect(str(KILLFEED_DB_PATH), check_same_thread=False)
+    where = "WHERE event_type='Kill'" + (f" AND LOWER(streamer)=LOWER('{streamer}')" if streamer else "")
+    rows = conn.execute(
+        f"SELECT victim, COUNT(*) as death_count FROM events {where} GROUP BY victim ORDER BY death_count DESC"
+    ).fetchall()
+    conn.close()
+    return {"victims": [{"victim": r[0], "death_count": r[1]} for r in rows if r[0]]}
 
-    victim_counts: dict[str, int] = {}
-    for e in events:
-        if e.get("event_type") != "kill":
-            continue
-        vic = e.get("victim", "")
-        if vic:
-            victim_counts[vic] = victim_counts.get(vic, 0) + 1
+@app.get("/gemini-stats")
+def gemini_stats():
+    """Live stats from the async Gemini validation queue.
 
-    rows = [{"victim": k, "death_count": v} for k, v in sorted(victim_counts.items(), key=lambda x: -x[1])]
-    return {"victims": rows}
+    Shows how many crops have been validated, the TrOCR agreement rate,
+    and how many corrections have been saved as training data.
+    Only available while ocr.py is running in the same process (or shared memory).
+    """
+    try:
+        from gemini_queue import get_queue
+        return get_queue().get_stats()
+    except Exception:
+        return {
+            "validated": 0,
+            "agreed": 0,
+            "corrections": 0,
+            "dropped": 0,
+            "agree_rate": 0.0,
+            "queue_size": 0,
+            "note": "Gemini queue not active (ocr.py not running in this process)",
+        }
 
 
 # ---------------------------------------------------------------------------

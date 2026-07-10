@@ -1,0 +1,1207 @@
+{
+  "generated_at": "2026-07-01 16:26:28",
+  "n_crops": 120,
+  "n_non_blank": 60,
+  "rows": [
+    {
+      "file": "bubblegum_L0_20260701_155538_0000.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 201.85869990382344,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L0_20260701_155539_0004.png",
+      "gt": "vaslp.dewgroup.ru",
+      "text": "9es prewgroupru",
+      "time_ms": 176.21319997124374,
+      "similarity": 0.6875,
+      "exact": false,
+      "cer": 0.35294117647058826,
+      "wer": 2.0
+    },
+    {
+      "file": "bubblegum_L0_20260701_155544_0008.png",
+      "gt": "Enemy Shield Broken -",
+      "text": "Enemy Shield Broken",
+      "time_ms": 172.1465999726206,
+      "similarity": 0.95,
+      "exact": false,
+      "cer": 0.09523809523809523,
+      "wer": 0.25
+    },
+    {
+      "file": "bubblegum_L0_20260701_155544_0010.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 191.9925999827683,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L0_20260701_155545_0012.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 135.79509989358485,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L0_20260701_155549_0013.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 168.3953000465408,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L0_20260701_155550_0018.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 187.6105999108404,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L0_20260701_155556_0022.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 95.72580002713948,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L0_20260701_155556_0023.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 116.60009995102882,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L0_20260701_155601_0026.png",
+      "gt": "",
+      "text": "DuNUNN I0",
+      "time_ms": 206.03780006058514,
+      "similarity": 0.0,
+      "exact": false,
+      "cer": 9.0,
+      "wer": 2.0
+    },
+    {
+      "file": "bubblegum_L0_20260701_155602_0029.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 157.51429996453226,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L0_20260701_155602_0038.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 88.76009995583445,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L0_20260701_155607_0039.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 185.96159992739558,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L1_20260701_155538_0001.png",
+      "gt": "◆ BOF",
+      "text": "bB,OA3",
+      "time_ms": 246.82450003456324,
+      "similarity": 0.36363636363636365,
+      "exact": false,
+      "cer": 1.0,
+      "wer": 1.0
+    },
+    {
+      "file": "bubblegum_L1_20260701_155539_0005.png",
+      "gt": "Enemy Shield Broken - Vantage",
+      "text": "Enem Shiold 8rokn E N",
+      "time_ms": 261.07170002069324,
+      "similarity": 0.72,
+      "exact": false,
+      "cer": 0.41379310344827586,
+      "wer": 1.0
+    },
+    {
+      "file": "bubblegum_L1_20260701_155544_0009.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 139.23490000888705,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L1_20260701_155544_0011.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 177.15740005951375,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L1_20260701_155549_0014.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 244.236099999398,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L1_20260701_155550_0019.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 177.12999996729195,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L1_20260701_155556_0024.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 192.9941000416875,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L1_20260701_155601_0027.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 273.47929996903986,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L1_20260701_155602_0030.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 142.45299994945526,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L2_20260701_155538_0002.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 197.34789989888668,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L2_20260701_155539_0006.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 226.77359997760504,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L2_20260701_155549_0015.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 220.19370005000383,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L2_20260701_155550_0020.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 199.87509993370622,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L2_20260701_155556_0025.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 206.3282000599429,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L2_20260701_155601_0028.png",
+      "gt": "BDF",
+      "text": "",
+      "time_ms": 216.55130002181977,
+      "similarity": 0.0,
+      "exact": false,
+      "cer": 1.0,
+      "wer": 1.0
+    },
+    {
+      "file": "bubblegum_L2_20260701_155602_0031.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 231.80049995426089,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L3_20260701_155538_0003.png",
+      "gt": "vasj 127M",
+      "text": "Am6<IU8 x38",
+      "time_ms": 214.37709999736398,
+      "similarity": 0.2,
+      "exact": false,
+      "cer": 1.2222222222222223,
+      "wer": 1.0
+    },
+    {
+      "file": "bubblegum_L3_20260701_155539_0007.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 87.8987000323832,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L3_20260701_155549_0016.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 210.4203999042511,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L3_20260701_155550_0021.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 110.97189993597567,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L3_20260701_155602_0032.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 211.81939996313304,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L4_20260701_155549_0017.png",
+      "gt": "74M",
+      "text": "TARM TCOM",
+      "time_ms": 210.95630002673715,
+      "similarity": 0.16666666666666666,
+      "exact": false,
+      "cer": 2.6666666666666665,
+      "wer": 2.0
+    },
+    {
+      "file": "bubblegum_L4_20260701_155602_0033.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 190.90929999947548,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L5_20260701_155602_0034.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 185.82860007882118,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L6_20260701_155602_0035.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 164.1424000263214,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L7_20260701_155602_0036.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 196.60200004000217,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "bubblegum_L8_20260701_155602_0037.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 179.27369999233633,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "demoniio_L0_20260701_161241_0000.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL stream a EWCEA",
+      "time_ms": 137.18970003537834,
+      "similarity": 0.9142857142857143,
+      "exact": false,
+      "cer": 0.17647058823529413,
+      "wer": 0.5
+    },
+    {
+      "file": "demoniio_L0_20260701_161242_0002.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL stream at EwC",
+      "time_ms": 125.90370001271367,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.058823529411764705,
+      "wer": 0.25
+    },
+    {
+      "file": "demoniio_L0_20260701_161242_0004.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL stream a-EWC;EA",
+      "time_ms": 128.03230003919452,
+      "similarity": 0.8333333333333334,
+      "exact": false,
+      "cer": 0.29411764705882354,
+      "wer": 0.5
+    },
+    {
+      "file": "demoniio_L0_20260701_161243_0006.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRLstream at EwC",
+      "time_ms": 122.45319993235171,
+      "similarity": 0.9696969696969697,
+      "exact": false,
+      "cer": 0.11764705882352941,
+      "wer": 0.75
+    },
+    {
+      "file": "demoniio_L0_20260701_161243_0008.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL stream a-EWC;EA",
+      "time_ms": 159.37239991035312,
+      "similarity": 0.8333333333333334,
+      "exact": false,
+      "cer": 0.29411764705882354,
+      "wer": 0.5
+    },
+    {
+      "file": "demoniio_L0_20260701_161244_0010.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL streama EWC;EA",
+      "time_ms": 124.31879993528128,
+      "similarity": 0.8571428571428571,
+      "exact": false,
+      "cer": 0.29411764705882354,
+      "wer": 0.75
+    },
+    {
+      "file": "demoniio_L0_20260701_161244_0012.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRLstream a EwC",
+      "time_ms": 119.32360008358955,
+      "similarity": 0.9375,
+      "exact": false,
+      "cer": 0.17647058823529413,
+      "wer": 1.0
+    },
+    {
+      "file": "demoniio_L0_20260701_161248_0014.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRLstream a EwC",
+      "time_ms": 116.5731999790296,
+      "similarity": 0.9375,
+      "exact": false,
+      "cer": 0.17647058823529413,
+      "wer": 1.0
+    },
+    {
+      "file": "demoniio_L0_20260701_161248_0016.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL stream a-EWCEA",
+      "time_ms": 124.49519999790937,
+      "similarity": 0.8571428571428571,
+      "exact": false,
+      "cer": 0.23529411764705882,
+      "wer": 0.5
+    },
+    {
+      "file": "demoniio_L0_20260701_161254_0018.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL stream a-EWC;EA",
+      "time_ms": 122.17380001675338,
+      "similarity": 0.8333333333333334,
+      "exact": false,
+      "cer": 0.29411764705882354,
+      "wer": 0.5
+    },
+    {
+      "file": "demoniio_L0_20260701_161254_0020.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL stream a-EWC;EA",
+      "time_ms": 120.67179998848587,
+      "similarity": 0.8333333333333334,
+      "exact": false,
+      "cer": 0.29411764705882354,
+      "wer": 0.5
+    },
+    {
+      "file": "demoniio_L0_20260701_161300_0022.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL stream a-EWCEA",
+      "time_ms": 123.0227000778541,
+      "similarity": 0.8571428571428571,
+      "exact": false,
+      "cer": 0.23529411764705882,
+      "wer": 0.5
+    },
+    {
+      "file": "demoniio_L0_20260701_161300_0024.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRLstream a EwC",
+      "time_ms": 120.21660001482815,
+      "similarity": 0.9375,
+      "exact": false,
+      "cer": 0.17647058823529413,
+      "wer": 1.0
+    },
+    {
+      "file": "demoniio_L0_20260701_161301_0026.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL stream a-EWC;EA",
+      "time_ms": 123.62269998993725,
+      "similarity": 0.8333333333333334,
+      "exact": false,
+      "cer": 0.29411764705882354,
+      "wer": 0.5
+    },
+    {
+      "file": "demoniio_L0_20260701_161306_0028.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL stream at EwC",
+      "time_ms": 121.47769995499402,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.058823529411764705,
+      "wer": 0.25
+    },
+    {
+      "file": "demoniio_L0_20260701_161306_0030.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL stream at EwC",
+      "time_ms": 123.33110009785742,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.058823529411764705,
+      "wer": 0.25
+    },
+    {
+      "file": "demoniio_L0_20260701_161312_0032.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL stream a-EWCEA",
+      "time_ms": 120.26829994283617,
+      "similarity": 0.8571428571428571,
+      "exact": false,
+      "cer": 0.23529411764705882,
+      "wer": 0.5
+    },
+    {
+      "file": "demoniio_L0_20260701_161312_0034.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL stream a-EWC;EA",
+      "time_ms": 120.38530001882464,
+      "similarity": 0.8333333333333334,
+      "exact": false,
+      "cer": 0.29411764705882354,
+      "wer": 0.5
+    },
+    {
+      "file": "demoniio_L0_20260701_161318_0036.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRL stream a-EWC;EA",
+      "time_ms": 124.49670000933111,
+      "similarity": 0.8333333333333334,
+      "exact": false,
+      "cer": 0.29411764705882354,
+      "wer": 0.5
+    },
+    {
+      "file": "demoniio_L0_20260701_161318_0038.png",
+      "gt": "IRL stream at EWC",
+      "text": "IRLstream at EwC",
+      "time_ms": 125.4232000792399,
+      "similarity": 0.9696969696969697,
+      "exact": false,
+      "cer": 0.11764705882352941,
+      "wer": 0.75
+    },
+    {
+      "file": "demoniio_L1_20260701_161241_0001.png",
+      "gt": "sub goal: 337/700",
+      "text": "su4b goal: 337/17",
+      "time_ms": 195.46670001000166,
+      "similarity": 0.8823529411764706,
+      "exact": false,
+      "cer": 0.23529411764705882,
+      "wer": 0.6666666666666666
+    },
+    {
+      "file": "demoniio_L1_20260701_161242_0003.png",
+      "gt": "sub goal: 337/700",
+      "text": "su gOa1/337 /7oq ",
+      "time_ms": 200.47659997362643,
+      "similarity": 0.6666666666666666,
+      "exact": false,
+      "cer": 0.5294117647058824,
+      "wer": 1.0
+    },
+    {
+      "file": "demoniio_L1_20260701_161242_0005.png",
+      "gt": "sub goal: 337/700",
+      "text": "sub goal:337/17o",
+      "time_ms": 185.26319996453822,
+      "similarity": 0.8484848484848485,
+      "exact": false,
+      "cer": 0.23529411764705882,
+      "wer": 0.6666666666666666
+    },
+    {
+      "file": "demoniio_L1_20260701_161243_0007.png",
+      "gt": "sub goal: 337/700",
+      "text": "sub goal: 337//7o",
+      "time_ms": 187.42169998586178,
+      "similarity": 0.8823529411764706,
+      "exact": false,
+      "cer": 0.17647058823529413,
+      "wer": 0.3333333333333333
+    },
+    {
+      "file": "demoniio_L1_20260701_161243_0009.png",
+      "gt": "sub goal: 337/700",
+      "text": "sub goal: 337//7",
+      "time_ms": 194.8801000835374,
+      "similarity": 0.9090909090909091,
+      "exact": false,
+      "cer": 0.17647058823529413,
+      "wer": 0.3333333333333333
+    },
+    {
+      "file": "demoniio_L1_20260701_161244_0011.png",
+      "gt": "sub goal: 337/700",
+      "text": "sub goal: 337/17oo",
+      "time_ms": 196.5858000330627,
+      "similarity": 0.8571428571428571,
+      "exact": false,
+      "cer": 0.17647058823529413,
+      "wer": 0.3333333333333333
+    },
+    {
+      "file": "demoniio_L1_20260701_161244_0013.png",
+      "gt": "sub goal: 337/700",
+      "text": "su gOa1/337 /7oq",
+      "time_ms": 195.46369998715818,
+      "similarity": 0.6666666666666666,
+      "exact": false,
+      "cer": 0.47058823529411764,
+      "wer": 1.0
+    },
+    {
+      "file": "demoniio_L1_20260701_161248_0015.png",
+      "gt": "sub goal: 337/700",
+      "text": "su gOa1/337 /7oo ",
+      "time_ms": 192.56470003165305,
+      "similarity": 0.6666666666666666,
+      "exact": false,
+      "cer": 0.5294117647058824,
+      "wer": 1.0
+    },
+    {
+      "file": "demoniio_L1_20260701_161248_0017.png",
+      "gt": "sub goal: 337/700",
+      "text": "sub goal:337/17",
+      "time_ms": 181.88250006642193,
+      "similarity": 0.875,
+      "exact": false,
+      "cer": 0.23529411764705882,
+      "wer": 0.6666666666666666
+    },
+    {
+      "file": "demoniio_L1_20260701_161254_0019.png",
+      "gt": "sub goal: 337/700",
+      "text": "sub goal:337//7oo",
+      "time_ms": 200.86400001309812,
+      "similarity": 0.8235294117647058,
+      "exact": false,
+      "cer": 0.23529411764705882,
+      "wer": 0.6666666666666666
+    },
+    {
+      "file": "demoniio_L1_20260701_161254_0021.png",
+      "gt": "sub goal: 337/700",
+      "text": "su4b goal: 337/17o",
+      "time_ms": 187.26759997662157,
+      "similarity": 0.8571428571428571,
+      "exact": false,
+      "cer": 0.23529411764705882,
+      "wer": 0.6666666666666666
+    },
+    {
+      "file": "demoniio_L1_20260701_161300_0023.png",
+      "gt": "sub goal: 337/700",
+      "text": "su gOa1;337 /7oq",
+      "time_ms": 192.08299997262657,
+      "similarity": 0.6666666666666666,
+      "exact": false,
+      "cer": 0.47058823529411764,
+      "wer": 1.0
+    },
+    {
+      "file": "demoniio_L1_20260701_161300_0025.png",
+      "gt": "sub goal: 337/700",
+      "text": "sub goal:337//7o",
+      "time_ms": 191.61830004304647,
+      "similarity": 0.8484848484848485,
+      "exact": false,
+      "cer": 0.23529411764705882,
+      "wer": 0.6666666666666666
+    },
+    {
+      "file": "demoniio_L1_20260701_161301_0027.png",
+      "gt": "sub goal: 337/700",
+      "text": "su gOal;337 /7oq ",
+      "time_ms": 200.9924000594765,
+      "similarity": 0.7272727272727273,
+      "exact": false,
+      "cer": 0.47058823529411764,
+      "wer": 1.0
+    },
+    {
+      "file": "demoniio_L1_20260701_161306_0029.png",
+      "gt": "sub goal: 337/700",
+      "text": "su gOal;337 /7o ",
+      "time_ms": 204.19519999995828,
+      "similarity": 0.75,
+      "exact": false,
+      "cer": 0.4117647058823529,
+      "wer": 1.0
+    },
+    {
+      "file": "demoniio_L1_20260701_161306_0031.png",
+      "gt": "sub goal: 337/700",
+      "text": "su gOa1/337 /7oo ",
+      "time_ms": 200.16260002739727,
+      "similarity": 0.6666666666666666,
+      "exact": false,
+      "cer": 0.5294117647058824,
+      "wer": 1.0
+    },
+    {
+      "file": "demoniio_L1_20260701_161312_0033.png",
+      "gt": "sub goal: 337/700",
+      "text": "sub goal:337/17",
+      "time_ms": 191.34989997837692,
+      "similarity": 0.875,
+      "exact": false,
+      "cer": 0.23529411764705882,
+      "wer": 0.6666666666666666
+    },
+    {
+      "file": "demoniio_L1_20260701_161312_0035.png",
+      "gt": "sub goal: 337/700",
+      "text": "sub goal: 337//7oo",
+      "time_ms": 193.6497000278905,
+      "similarity": 0.8571428571428571,
+      "exact": false,
+      "cer": 0.17647058823529413,
+      "wer": 0.3333333333333333
+    },
+    {
+      "file": "demoniio_L1_20260701_161318_0037.png",
+      "gt": "sub goal: 337/700",
+      "text": "sub goal: 337/17o",
+      "time_ms": 191.1229999968782,
+      "similarity": 0.8823529411764706,
+      "exact": false,
+      "cer": 0.17647058823529413,
+      "wer": 0.3333333333333333
+    },
+    {
+      "file": "demoniio_L1_20260701_161318_0039.png",
+      "gt": "sub goal: 337/700",
+      "text": "su4b goal: 337//7",
+      "time_ms": 201.25760009977967,
+      "similarity": 0.8823529411764706,
+      "exact": false,
+      "cer": 0.23529411764705882,
+      "wer": 0.6666666666666666
+    },
+    {
+      "file": "gent_L0_20260701_160440_0000.png",
+      "gt": "9 3 3 1962",
+      "text": "96E <GUN_ICON> 3 3AM <GUN_ICON> r862> <GUN_ICON> +17 RIP>4184728 RP8ICAN>",
+      "time_ms": 454.7909999964759,
+      "similarity": 0.1927710843373494,
+      "exact": false,
+      "cer": 6.5,
+      "wer": 2.25
+    },
+    {
+      "file": "gent_L0_20260701_160441_0007.png",
+      "gt": "9 3 3 1962",
+      "text": "Y1U83 42NA",
+      "time_ms": 311.1706000054255,
+      "similarity": 0.3,
+      "exact": false,
+      "cer": 0.8,
+      "wer": 1.0
+    },
+    {
+      "file": "gent_L0_20260701_160441_0014.png",
+      "gt": "9 3 3 1962",
+      "text": "8 <GUN_ICON> 3 <GUN_ICON> 3 EAM <GUN_ICON> 7183882A3 <GUN_ICON> +179 RIPi",
+      "time_ms": 474.37559999525547,
+      "similarity": 0.1686746987951807,
+      "exact": false,
+      "cer": 6.6,
+      "wer": 2.25
+    },
+    {
+      "file": "gent_L0_20260701_160445_0020.png",
+      "gt": "9 3 3 1962",
+      "text": "9E <GUN_ICON> 8E <GUN_ICON> 3 EAM <GUN_ICON> 7138982A <GUN_ICON> +179 RIPi>icomwilom ",
+      "time_ms": 512.0165999978781,
+      "similarity": 0.1702127659574468,
+      "exact": false,
+      "cer": 7.7,
+      "wer": 2.5
+    },
+    {
+      "file": "gent_L0_20260701_160445_0027.png",
+      "gt": "9 3 3 1962",
+      "text": "9 E 3 <GUN_ICON> 3 <GUN_ICON> 81882 <GUN_ICON> 417 RIPM918134129N RNP0N_ICAN",
+      "time_ms": 475.09840002749115,
+      "similarity": 0.20930232558139536,
+      "exact": false,
+      "cer": 6.7,
+      "wer": 2.0
+    },
+    {
+      "file": "gent_L0_20260701_160446_0033.png",
+      "gt": "9 3 3 1962",
+      "text": "9 E 03293_#A 53 _TAM <GUN_ICON> 0087G886823- <GUN_ICON> A41708 RIPA3>@I OUA",
+      "time_ms": 423.12669998500496,
+      "similarity": 0.16470588235294117,
+      "exact": false,
+      "cer": 6.7,
+      "wer": 2.5
+    },
+    {
+      "file": "gent_L0_20260701_160451_0039.png",
+      "gt": "9 3 3 1962",
+      "text": "9 <GUN_ICON> 3 <GUN_ICON> 3 <GUN_ICON> t1G8828A0M <GUN_ICON> +17 RIPu>1I14281Rp",
+      "time_ms": 340.1353000663221,
+      "similarity": 0.1797752808988764,
+      "exact": false,
+      "cer": 7.1,
+      "wer": 1.75
+    },
+    {
+      "file": "gent_L1_20260701_160440_0001.png",
+      "gt": "FPS: 239 ID:13/29 loss 0/0 choke 0/0",
+      "text": "ER PRS 2N308861IO0N13//29EA YIJOss /30choko.OA",
+      "time_ms": 364.75239996798337,
+      "similarity": 0.5121951219512195,
+      "exact": false,
+      "cer": 0.8055555555555556,
+      "wer": 1.0
+    },
+    {
+      "file": "gent_L1_20260701_160441_0008.png",
+      "gt": "FPS: 239 ID:13/29 loss 0/0 choke 0/0",
+      "text": "8E <GUN_ICON> 3E 3AM <GUN_ICON> N148OUN82- <GUN_ICON> +17 RIPu>u",
+      "time_ms": 395.1511000050232,
+      "similarity": 0.04,
+      "exact": false,
+      "cer": 1.5555555555555556,
+      "wer": 1.2857142857142858
+    },
+    {
+      "file": "gent_L1_20260701_160441_0015.png",
+      "gt": "FPS: 239 ID:13/29 loss 0/0 choke 0/0",
+      "text": "uif0G-8NO>DyamD ps m<N88Ni012tN_N_Irn I10COOUN9BNGUN3N-0tUN<NSN31.8036888/-90ICONN O/-Cchokoaoo-",
+      "time_ms": 456.35450002737343,
+      "similarity": 0.2727272727272727,
+      "exact": false,
+      "cer": 2.2777777777777777,
+      "wer": 1.0
+    },
+    {
+      "file": "gent_L1_20260701_160445_0021.png",
+      "gt": "FPS: 239 ID:13/29 loss 0/0 choke 0/0",
+      "text": "inO-8 8msE7PNN2481O-12/3O0AM41COO918133101251321803688€-(ItOss.0/3 ctok8O8",
+      "time_ms": 497.7623999584466,
+      "similarity": 0.2909090909090909,
+      "exact": false,
+      "cer": 1.7222222222222223,
+      "wer": 1.0
+    },
+    {
+      "file": "gent_L1_20260701_160445_0028.png",
+      "gt": "FPS: 239 ID:13/29 loss 0/0 choke 0/0",
+      "text": "E7NN _308N1I08N39137/328*A JIOsI O/30-chokO/O",
+      "time_ms": 381.05389999691397,
+      "similarity": 0.41975308641975306,
+      "exact": false,
+      "cer": 0.8333333333333334,
+      "wer": 1.0
+    },
+    {
+      "file": "gent_L1_20260701_160446_0034.png",
+      "gt": "FPS: 239 ID:13/29 loss 0/0 choke 0/0",
+      "text": "pin-8s> 4 OOUNRUN3N012N13321-83688588-I",
+      "time_ms": 313.1031000521034,
+      "similarity": 0.18666666666666668,
+      "exact": false,
+      "cer": 1.0555555555555556,
+      "wer": 1.0
+    },
+    {
+      "file": "gent_L2_20260701_160440_0002.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 318.93680000212044,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L2_20260701_160441_0009.png",
+      "gt": "",
+      "text": "EPSN G3898N1IOU8/0A- YIjOss //30 ctoko",
+      "time_ms": 392.6193000515923,
+      "similarity": 0.0,
+      "exact": false,
+      "cer": 38.0,
+      "wer": 5.0
+    },
+    {
+      "file": "gent_L2_20260701_160441_0016.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 250.9139000903815,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L2_20260701_160445_0022.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 317.6777999615297,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L2_20260701_160445_0029.png",
+      "gt": "",
+      "text": "ping-i8m 41OO 8 GINNO2NSHN<1N 83188SC8-",
+      "time_ms": 338.7088000308722,
+      "similarity": 0.0,
+      "exact": false,
+      "cer": 39.0,
+      "wer": 5.0
+    },
+    {
+      "file": "gent_L2_20260701_160446_0035.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 160.48510000109673,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L3_20260701_160440_0003.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 197.47809995897114,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L3_20260701_160441_0010.png",
+      "gt": "",
+      "text": "ping-89ms 4N1IOOU9RUN3N_O12251321-883688S88-E",
+      "time_ms": 393.6478999676183,
+      "similarity": 0.0,
+      "exact": false,
+      "cer": 45.0,
+      "wer": 2.0
+    },
+    {
+      "file": "gent_L3_20260701_160441_0017.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 193.07779998052865,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L3_20260701_160445_0023.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 184.1725999256596,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L3_20260701_160445_0030.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 245.8840999752283,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L3_20260701_160446_0036.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 176.0256999405101,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L4_20260701_160440_0004.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 187.555699958466,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L4_20260701_160441_0011.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 221.47300001233816,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L4_20260701_160441_0018.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 206.8138999165967,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L4_20260701_160445_0024.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 171.94240004755557,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L4_20260701_160445_0031.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 237.45250003412366,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L4_20260701_160446_0037.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 185.54659991059452,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L5_20260701_160440_0005.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 186.46060000173748,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L5_20260701_160441_0012.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 168.06059994269162,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L5_20260701_160441_0019.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 299.61670003831387,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L5_20260701_160445_0025.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 177.09439992904663,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L5_20260701_160445_0032.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 421.5252000140026,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L5_20260701_160446_0038.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 158.28450000844896,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L6_20260701_160440_0006.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 237.2345000039786,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L6_20260701_160441_0013.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 236.3516999175772,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    },
+    {
+      "file": "gent_L6_20260701_160445_0026.png",
+      "gt": "",
+      "text": "",
+      "time_ms": 218.67139998357743,
+      "similarity": 1.0,
+      "exact": true,
+      "cer": 0.0,
+      "wer": 0.0
+    }
+  ]
+}

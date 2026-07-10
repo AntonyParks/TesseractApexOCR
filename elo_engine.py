@@ -20,6 +20,7 @@ from elo_db import (
 from match_detector import Match, get_player_survival, CONF_FLOOR
 
 STARTING_ELO = 1000.0
+ELO_FLOOR = 100.0
 K_HIGH = 32.0   # first 20 matches
 K_LOW = 16.0    # after 20 matches
 K_THRESHOLD = 20
@@ -67,6 +68,7 @@ def process_match(match: Match, ratings_cache: dict, db_path: Path = ELO_DB_PATH
         end_time=match.end_time.strftime("%Y-%m-%d %H:%M:%S"),
         kill_count=match.kill_count,
         players_observed=match.players_observed,
+        merged_from=",".join(getattr(match, "merged_from", []) or []),
         path=db_path,
     )
 
@@ -200,23 +202,59 @@ def process_match(match: Match, ratings_cache: dict, db_path: Path = ELO_DB_PATH
         r = _get_or_default(player, ratings_cache, db_path)
         elo_before = r["elo"]
         delta = elo_deltas.get(player, 0.0)
-        elo_after = elo_before + delta
+        elo_after = max(ELO_FLOOR, elo_before + delta)
         r["elo"] = elo_after
         r["matches_played"] = r["matches_played"] + 1
 
-        # Write placement row if player has a definitive elimination order
+        # Placement row for everyone with a known survival position. Eliminated players
+        # store their elimination kill_order; survivors (attacker-only, never definitively
+        # eliminated on stream) store their survival FLOOR with survived=1 so the API can
+        # distinguish "died as kill N" from "still alive at least until kill N".
         kill_order_out = elimination_order.get(player) or attacker_only.get(player, 0)
-        if kill_order_out and delta != 0.0:
+        if kill_order_out:
             upsert_placement(
                 match_id=match.match_id,
                 player=player,
                 kill_order_out=kill_order_out,
                 elo_before=elo_before,
                 elo_after=elo_after,
+                survived=1 if player in attacker_only else 0,
                 path=db_path,
             )
 
     return {p: ratings_cache[p]["elo"] for p in affected_players}
+
+
+def _is_anonymized_player(name: str) -> bool:
+    if not name:
+        return False
+    name_low = name.lower().strip()
+
+    # Build list of legend patterns (canonical names, lowercase, and common abbreviations/typos)
+    legend_patterns = set()
+    for legend in APEX_LEGENDS_CANONICAL:
+        l_low = legend.lower()
+        legend_patterns.add(l_low)
+        legend_patterns.add(l_low.replace(" ", ""))
+        legend_patterns.add(l_low.replace(" ", "-"))
+        if l_low == "valkyrie":
+            legend_patterns.add("valk")
+        if l_low == "madmaggie":
+            legend_patterns.add("maggie")
+
+    # Check if name is bracketed legend name (e.g. [valk], (octane))
+    clean = re.sub(r'[\[\]\(\)]', '', name_low).strip()
+    if clean in legend_patterns:
+        return True
+
+    # Check if name starts with a legend name and ends with numbers (e.g. Valkyrie4823, valk683)
+    for l_pat in legend_patterns:
+        if name_low.startswith(l_pat):
+            remainder = name_low[len(l_pat):].strip()
+            if remainder and remainder.isdigit():
+                return True
+
+    return False
 
 
 _COMMON_WORDS_SET = {w.lower() for w in COMMON_WORDS}
@@ -225,6 +263,8 @@ _COMMON_WORDS_SET = {w.lower() for w in COMMON_WORDS}
 def _is_valid_player(name: str) -> bool:
     """Return False for legend names, too-short names, common words, and OCR noise."""
     if name in APEX_LEGENDS_CANONICAL:
+        return False
+    if _is_anonymized_player(name):
         return False
     if len(name) < PLAYER_NAME_MIN_LENGTH:
         return False
@@ -245,6 +285,14 @@ def _is_valid_player(name: str) -> bool:
         return False
     # Filter ping display artifacts: "ping_34ms", "ping.3bsmk"
     if re.match(r'^ping[_.]', name.lower()):
+        return False
+    # Filter [Bleed Out] tag fragments leaking into names (e.g. "int[Bleed", "Out]m") --
+    # surfaced when BleedOut rows became kill-equivalents (2026-07-04).
+    if '[bleed' in name.lower() or 'bleed]' in name.lower():
+        return False
+    # Filter names that are ONLY a clan tag (e.g. "[x78]") -- a tag with the actual
+    # name lost to OCR is not an identity we can rate.
+    if re.fullmatch(r'\[[^\]]*\]', name):
         return False
     return True
 

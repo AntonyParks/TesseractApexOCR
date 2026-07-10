@@ -1,9 +1,14 @@
 """Bootstrap ELO ratings from existing killfeed_log.csv data.
 
+A full reprocess reads ALL events from killfeed.db and replays every match, so it is only
+correct when it starts from an empty elo.db. Writing onto a non-empty DB double-counts
+(compounds matches_played, re-applies ELO passes). Therefore the default now ALWAYS rebuilds
+from a clean slate; --append opts back into the legacy stacking behavior for anyone who wants it.
+
 Usage:
-    python reprocess.py                # process all data → elo.db
+    python reprocess.py                # rebuild elo.db from scratch (always clean — default)
     python reprocess.py --dry-run      # detect matches only, no DB writes
-    python reprocess.py --reset        # wipe elo.db and reprocess from scratch
+    python reprocess.py --append       # legacy: stack onto existing elo.db (COMPOUNDS ratings)
     python reprocess.py --gap 400      # use 400s gap threshold (default 300)
     python reprocess.py --min-kills 5  # require at least 5 kills per match
     python reprocess.py --dedupe       # merge near-duplicate player names after ELO
@@ -15,74 +20,102 @@ from collections import Counter
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from config import LOG_PATH
+from config import LOG_PATH, KILLFEED_DB_PATH
 from elo_db import ELO_DB_PATH, drop_db, get_all_player_ratings, init_db, merge_player
 from elo_engine import batch_reprocess
-from match_detector import GAP_SECONDS, MIN_KILLS, detect_matches, get_player_survival
+from match_detector import GAP_SECONDS, MIN_KILLS, detect_matches, detect_matches_from_db, get_player_survival
 
-_DEDUPE_RATIO = 0.75   # SequenceMatcher threshold for considering two names the same
-_DEDUPE_PREFIX = 3     # names must share this many leading chars to be considered
-_DEDUPE_MIN_LEN = 6    # only deduplicate names this long or longer (short names too ambiguous)
+_DEDUPE_PREFIX = 3     # names must share this many leading chars for standard similarity threshold
+_DEDUPE_MIN_LEN = 4    # lowered from 6 to 4 to support short player names
 
 
 def deduplicate_players(db_path: Path, dry_run: bool = False) -> list[tuple]:
-    """Cluster near-duplicate player names and merge them.
-
-    Returns list of (canonical, duplicates, merged_stats) for each merge performed.
-    """
+    """Cluster near-duplicate player names using Connected Components (transitive) clustering."""
     players = get_all_player_ratings(db_path)
     if not players:
         return []
 
-    # Build clusters: greedy — assign each name to the first cluster it's similar to
-    clusters: list[list[dict]] = []
-    for p in players:
-        name = p["player"].lower()
-        placed = False
-        # Skip deduplication for short names — too ambiguous at this threshold
-        if len(name) >= _DEDUPE_MIN_LEN:
-            for cluster in clusters:
-                rep = cluster[0]["player"].lower()
-                if len(rep) < _DEDUPE_MIN_LEN:
-                    continue
-                # Must share first N chars AND meet similarity threshold
-                if (name[:_DEDUPE_PREFIX] == rep[:_DEDUPE_PREFIX] and
-                        SequenceMatcher(None, name, rep).ratio() >= _DEDUPE_RATIO):
-                    cluster.append(p)
-                    placed = True
-                    break
-        if not placed:
-            clusters.append([p])
+    # Build adjacency list (graph) where nodes are player names
+    # Two nodes have an edge if they satisfy the hybrid similarity check
+    adj = {p["player"]: set() for p in players}
+    n_players = len(players)
 
-    # Also handle "base + noise suffix" pattern: "baby" → "baby svoo", "baby 5jzd"
-    # Find single-word names that are a prefix of multi-word names
-    single_names = {p["player"].lower(): p for p in players if " " not in p["player"]}
-    multi_names = [p for p in players if " " in p["player"]]
+    for i in range(n_players):
+        p1 = players[i]
+        name1 = p1["player"].lower()
+        if len(name1) < _DEDUPE_MIN_LEN:
+            continue
+            
+        for j in range(i + 1, n_players):
+            p2 = players[j]
+            name2 = p2["player"].lower()
+            if len(name2) < _DEDUPE_MIN_LEN:
+                continue
+
+            ratio = SequenceMatcher(None, name1, name2).ratio()
+            
+            # Hybrid comparison:
+            # 1. Share first 3 characters: require similarity >= 0.70
+            # 2. Different prefix: require similarity >= 0.82 (very strict for minor spelling typos)
+            if name1[:_DEDUPE_PREFIX] == name2[:_DEDUPE_PREFIX]:
+                is_similar = (ratio >= 0.70)
+            else:
+                is_similar = (ratio >= 0.82)
+
+            if is_similar:
+                adj[p1["player"]].add(p2["player"])
+                adj[p2["player"]].add(p1["player"])
+
+    # Also handle "base + noise suffix" pattern: "baby" -> "baby svoo"
+    single_names = {p["player"].lower(): p["player"] for p in players if " " not in p["player"]}
+    multi_names = [p["player"] for p in players if " " in p["player"]]
     for mp in multi_names:
-        base = mp["player"].split()[0].lower()
+        base = mp.split()[0].lower()
         if base in single_names and len(base) >= 4:
-            base_player = single_names[base]
-            # Check if they're already in the same cluster
-            already_merged = False
-            for cluster in clusters:
-                names_in_cluster = [c["player"].lower() for c in cluster]
-                if base in names_in_cluster and mp["player"].lower() in names_in_cluster:
-                    already_merged = True
-                    break
-            if not already_merged:
-                # Add to base player's cluster
-                for cluster in clusters:
-                    if cluster[0]["player"].lower() == base:
-                        cluster.append(mp)
-                        break
+            orig_base_name = single_names[base]
+            adj[orig_base_name].add(mp)
+            adj[mp].add(orig_base_name)
+
+    # Traverse graph using BFS to find connected components (clusters)
+    visited = set()
+    clusters: list[list[dict]] = []
+    player_by_name = {p["player"]: p for p in players}
+
+    for p in players:
+        name = p["player"]
+        if name in visited:
+            continue
+            
+        component = []
+        queue = [name]
+        visited.add(name)
+        
+        while queue:
+            curr = queue.pop(0)
+            component.append(player_by_name[curr])
+            for neighbor in adj[curr]:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append(neighbor)
+                    
+        clusters.append(component)
 
     merges = []
     for cluster in clusters:
         if len(cluster) <= 1:
             continue
 
-        # Canonical = most matches played; ties broken by longest name
-        canonical_row = max(cluster, key=lambda r: (r["matches_played"], len(r["player"])))
+        # Canonical selection: prioritize mixed casing (CamelCase / mixed upper-lower)
+        # over raw lowercase OCR typos, then break ties by matches_played and length.
+        def get_canonical_score(r: dict) -> tuple:
+            p_name = r["player"]
+            # Has both upper and lower case letters
+            has_upper = any(c.isupper() for c in p_name)
+            has_lower = any(c.islower() for c in p_name)
+            mixed_case_bonus = 1 if (has_upper and has_lower) else 0
+            return (mixed_case_bonus, r["matches_played"], len(p_name))
+
+        canonical_row = max(cluster, key=get_canonical_score)
         canonical = canonical_row["player"]
         duplicates = [r["player"] for r in cluster if r["player"] != canonical]
 
@@ -113,29 +146,40 @@ def deduplicate_players(db_path: Path, dry_run: bool = False) -> list[tuple]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Reprocess killfeed CSV into ELO ratings")
-    parser.add_argument("--dry-run", action="store_true", help="Detect matches only, no DB writes")
-    parser.add_argument("--reset", action="store_true", help="Wipe elo.db before reprocessing")
-    parser.add_argument("--gap", type=int, default=GAP_SECONDS, help="Gap seconds between matches")
-    parser.add_argument("--min-kills", type=int, default=MIN_KILLS, help="Min kills per match")
-    parser.add_argument("--csv", type=Path, default=LOG_PATH, help="Path to killfeed CSV")
-    parser.add_argument("--db", type=Path, default=ELO_DB_PATH, help="Path to elo.db")
-    parser.add_argument("--dedupe", action="store_true",
+    parser = argparse.ArgumentParser(description="Reprocess killfeed data into ELO ratings")
+    parser.add_argument("--dry-run",  action="store_true", help="Detect matches only, no DB writes")
+    parser.add_argument("--reset",    action="store_true",
+                        help="(now the default; kept for compatibility) wipe elo.db before reprocessing")
+    parser.add_argument("--append",   action="store_true",
+                        help="Legacy: stack onto an existing elo.db instead of rebuilding — this "
+                             "COMPOUNDS matches_played and re-applies ELO passes. Almost never correct.")
+    parser.add_argument("--gap",      type=int, default=GAP_SECONDS, help="Gap seconds between matches")
+    parser.add_argument("--min-kills",type=int, default=MIN_KILLS,   help="Min kills per match")
+    parser.add_argument("--csv",      type=Path, default=LOG_PATH,   help="Path to killfeed CSV (legacy)")
+    parser.add_argument("--db-log",   type=Path, default=KILLFEED_DB_PATH, help="Path to killfeed.db")
+    parser.add_argument("--db",       type=Path, default=ELO_DB_PATH,     help="Path to elo.db")
+    parser.add_argument("--dedupe",   action="store_true",
                         help="Merge near-duplicate player names after ELO processing")
+    parser.add_argument("--force-csv",action="store_true", help="Force CSV source even if DB exists")
     args = parser.parse_args()
 
-    # --dedupe-only: skip reprocessing, just run deduplication on existing DB
-    if args.dedupe and not args.csv.exists():
-        print("CSV not found — running deduplication on existing DB only...")
+    # Choose data source: SQLite preferred, CSV fallback
+    use_db = args.db_log.exists() and not args.force_csv
+
+    if args.dedupe and not use_db and not args.csv.exists():
+        print("No data source found — running deduplication on existing ELO DB only...")
         _run_dedupe(args.db, args.dry_run)
         return
 
-    if not args.csv.exists():
-        print(f"ERROR: CSV not found at {args.csv}")
-        return
-
-    print(f"Detecting matches from {args.csv} (gap={args.gap}s, min_kills={args.min_kills})...")
-    matches = detect_matches(args.csv, gap_seconds=args.gap, min_kills=args.min_kills)
+    if use_db:
+        print(f"Detecting matches from {args.db_log} (SQLite, gap={args.gap}s, min_kills={args.min_kills})...")
+        matches = detect_matches_from_db(args.db_log, gap_seconds=args.gap, min_kills=args.min_kills)
+    else:
+        if not args.csv.exists():
+            print(f"ERROR: Neither {args.db_log} nor {args.csv} found.")
+            return
+        print(f"Detecting matches from {args.csv} (CSV, gap={args.gap}s, min_kills={args.min_kills})...")
+        matches = detect_matches(args.csv, gap_seconds=args.gap, min_kills=args.min_kills)
     print(f"  -> {len(matches)} matches detected\n")
 
     if not matches:
@@ -176,11 +220,16 @@ def main():
 
     print(f"\nWriting to {args.db}...")
 
-    if args.reset:
-        print("  Resetting elo.db...")
-        drop_db(args.db)
-    else:
+    # Default: rebuild from a clean slate (the only correct behavior, since every run replays
+    # ALL matches). --append is the explicit, warned opt-in to the legacy compounding behavior.
+    if args.append:
         init_db(args.db)
+        if get_all_player_ratings(args.db):
+            print("  [WARNING] --append onto a non-empty elo.db: matches_played and ELO will "
+                  "COMPOUND on top of existing rows. This is almost never what you want.")
+    else:
+        print("  Rebuilding elo.db from a clean slate...")
+        drop_db(args.db)
 
     print("  Running ELO engine...")
     ratings = batch_reprocess(matches, db_path=args.db)

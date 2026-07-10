@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS matches (
     start_time       TEXT NOT NULL,
     end_time         TEXT NOT NULL,
     kill_count       INTEGER NOT NULL,
-    players_observed INTEGER NOT NULL
+    players_observed INTEGER NOT NULL,
+    merged_from      TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS match_kills (
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS match_placements (
     match_id       TEXT NOT NULL,
     player         TEXT NOT NULL,
     kill_order_out INTEGER NOT NULL,
+    survived       INTEGER NOT NULL DEFAULT 0,
     elo_before     REAL NOT NULL,
     elo_after      REAL NOT NULL,
     elo_change     REAL NOT NULL,
@@ -96,14 +98,14 @@ def drop_db(path: Path = ELO_DB_PATH) -> None:
 # ---------------------------------------------------------------------------
 
 def upsert_match(match_id: str, streamer: str, start_time: str, end_time: str,
-                 kill_count: int, players_observed: int,
+                 kill_count: int, players_observed: int, merged_from: str = "",
                  path: Path = ELO_DB_PATH) -> None:
     with get_conn(path) as conn:
         conn.execute("""
             INSERT OR REPLACE INTO matches
-                (match_id, streamer, start_time, end_time, kill_count, players_observed)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (match_id, streamer, start_time, end_time, kill_count, players_observed))
+                (match_id, streamer, start_time, end_time, kill_count, players_observed, merged_from)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (match_id, streamer, start_time, end_time, kill_count, players_observed, merged_from))
 
 
 def upsert_match_kills(kills: list[dict], path: Path = ELO_DB_PATH) -> None:
@@ -126,15 +128,18 @@ def upsert_match_kills(kills: list[dict], path: Path = ELO_DB_PATH) -> None:
 
 
 def upsert_placement(match_id: str, player: str, kill_order_out: int,
-                     elo_before: float, elo_after: float,
+                     elo_before: float, elo_after: float, survived: int = 0,
                      path: Path = ELO_DB_PATH) -> None:
+    """survived=1 means the player was never (definitively) eliminated on stream this
+    match; kill_order_out is then their survival FLOOR (last kill they were seen making),
+    not an elimination position."""
     elo_change = elo_after - elo_before
     with get_conn(path) as conn:
         conn.execute("""
             INSERT OR REPLACE INTO match_placements
-                (match_id, player, kill_order_out, elo_before, elo_after, elo_change)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (match_id, player, kill_order_out, elo_before, elo_after, elo_change))
+                (match_id, player, kill_order_out, survived, elo_before, elo_after, elo_change)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (match_id, player, kill_order_out, survived, elo_before, elo_after, elo_change))
 
 
 def update_player_rating(player: str, elo: float, matches_played: int,
@@ -229,8 +234,9 @@ def get_match(match_id: str, path: Path = ELO_DB_PATH) -> Optional[dict]:
         """, (match_id,)).fetchall()
 
         placements = conn.execute("""
-            SELECT player, kill_order_out, elo_before, elo_after, elo_change
-            FROM match_placements WHERE match_id = ? ORDER BY kill_order_out DESC
+            SELECT player, kill_order_out, survived, elo_before, elo_after, elo_change
+            FROM match_placements WHERE match_id = ?
+            ORDER BY survived DESC, kill_order_out DESC
         """, (match_id,)).fetchall()
 
         return {

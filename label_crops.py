@@ -38,6 +38,16 @@ LABELS_CLEAN_CSV = LABELS_DIR / "labels_clean.csv"
 CROPS_ROOT = Path("crops")
 NOISE_CROPS_ROOT = Path("crops_noise")
 MODEL = "claude-haiku-4-5-20251001"
+
+# Claude sometimes uses typographic punctuation (en/em dash, curly quotes) that isn't in the
+# EasyOCR training charset (see KNOWN_ISSUES.md) -- dataset.py silently strips anything outside
+# the charset at training time, so normalize to the ASCII equivalents actually in the charset
+# here, at label-extraction time, rather than losing that content later.
+_CHAR_NORMALIZE = str.maketrans({
+    "–": "-", "—": "-",           # en dash, em dash
+    "‘": "'", "’": "'",           # curly single quotes
+    "“": '"', "”": '"',           # curly double quotes
+})
 MAX_TOKENS = 128
 CHUNK_SIZE = 5_000   # Max requests per API batch (well under the 256 MB limit)
 
@@ -91,12 +101,57 @@ def _quality_tier(label: str) -> str | None:
     return "low"
 
 
-def _collect_crop_paths() -> list[Path]:
-    """Return all PNG crop paths under crops/ and crops_noise/."""
-    paths = list(CROPS_ROOT.rglob("*.png"))
+EVAL_HOLDOUT_CSV = LABELS_DIR / "eval_holdout.csv"
+
+
+def _eval_holdout_filenames() -> set:
+    """Filenames hand-labeled as the held-out eval set -- must never enter training labels."""
+    if not EVAL_HOLDOUT_CSV.exists():
+        return set()
+    with EVAL_HOLDOUT_CSV.open(encoding="utf-8") as f:
+        return {row["filename"] for row in csv.DictReader(f)}
+
+
+def _collect_crop_paths(streamers: set | None = None, noise_limit: int | None = None) -> list[Path]:
+    """Return PNG crop paths under crops/ and crops_noise/, ready for labeling.
+
+    Excludes *_raw.png companions: those are unprocessed color crops saved only
+    for human viewing (crop_saver.py), never what EasyOCR actually sees at
+    inference (preprocess_for_easyocr's inverted/upscaled/stretched grayscale
+    output). Labeling or training on them would waste budget and introduce a
+    train/inference mismatch.
+
+    Always excludes the hand-labeled eval_holdout.csv filenames -- that set exists
+    specifically to measure training results on data the model never trained on;
+    silently mixing it back into labels_clean.csv would make it useless for that.
+
+    Args:
+        streamers: if given, only include crops from these streamer subdirectories
+            (matches crops/<streamer>/... and crops_noise/<streamer>/...).
+        noise_limit: if given, cap how many crops_noise/ files are included (randomly
+            sampled, seeded for reproducibility) -- most noise crops are near-duplicate
+            blank/terrain frames with little marginal training value.
+    """
+    eval_names = _eval_holdout_filenames()
+
+    def _keep(p: Path) -> bool:
+        if p.name in eval_names:
+            return False
+        if streamers is not None and p.parent.name not in streamers:
+            return False
+        return True
+
+    positive = [p for p in CROPS_ROOT.rglob("*.png")
+                if not p.name.endswith("_raw.png") and _keep(p)]
+
+    noise = []
     if NOISE_CROPS_ROOT.exists():
-        paths.extend(NOISE_CROPS_ROOT.rglob("*.png"))
-    return sorted(paths)
+        noise = [p for p in NOISE_CROPS_ROOT.rglob("*.png") if _keep(p)]
+        if noise_limit is not None and len(noise) > noise_limit:
+            random.seed(20260702)
+            noise = random.sample(noise, noise_limit)
+
+    return sorted(positive + noise)
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +162,12 @@ def cmd_submit(args) -> list[str]:
     """Build requests and submit to Anthropic Batch API (auto-chunks into <=5k batches)."""
     LABELS_DIR.mkdir(parents=True, exist_ok=True)
 
-    crop_paths = _collect_crop_paths()
+    streamers = None
+    if getattr(args, "streamers", None):
+        streamers = {s.strip() for s in args.streamers.split(",") if s.strip()}
+    noise_limit = getattr(args, "noise_limit", None)
+
+    crop_paths = _collect_crop_paths(streamers=streamers, noise_limit=noise_limit)
     if not crop_paths:
         print(f"No crops found under {CROPS_ROOT}. Run ocr.py with SAVE_CROPS=True first.")
         sys.exit(1)
@@ -223,7 +283,7 @@ def cmd_collect(batch_id: str, append: bool = False) -> tuple[int, int]:
         if result.result.type != "succeeded":
             continue
 
-        label = result.result.message.content[0].text.strip()
+        label = result.result.message.content[0].text.strip().translate(_CHAR_NORMALIZE)
         tier = _quality_tier(label)
         if tier is None:
             continue
@@ -341,7 +401,11 @@ def cmd_run(args) -> None:
     total_results = 0
     total_kept = 0
     for i, bid in enumerate(batch_ids):
-        n_total, n_kept = cmd_collect(bid, append=(i > 0))
+        # Always append: labels_clean.csv also accumulates rows from the live Gemini
+        # validation queue (ocr.py), so an unconditional overwrite on the first batch
+        # would silently destroy that history. Only `collect` invoked standalone
+        # without --append still defaults to overwrite, for explicit one-off resets.
+        n_total, n_kept = cmd_collect(bid, append=True)
         total_results += n_total
         total_kept += n_kept
         print(f"  Batch {i+1}/{n_batches} ({bid}): {n_total} results, {n_kept} kept")
@@ -351,7 +415,7 @@ def cmd_run(args) -> None:
         for row in csv.DictReader(LABELS_CLEAN_CSV.open(encoding="utf-8")):
             tier_counts[row["quality"]] = tier_counts.get(row["quality"], 0) + 1
 
-    print(f"\nTotal: {total_results} results → kept {total_kept} ({total_kept/max(total_results,1)*100:.1f}%)")
+    print(f"\nTotal: {total_results} results -> kept {total_kept} ({total_kept/max(total_results,1)*100:.1f}%)")
     print(f"  Quality tiers: {tier_counts}")
     print(f"  Written to: {LABELS_CLEAN_CSV}")
 
@@ -368,11 +432,15 @@ def main():
     p_submit.add_argument("--limit", type=int, default=None, help="Max crops to submit")
     p_submit.add_argument("--best", action="store_true",
                           help="Select highest-content crops (by file size) instead of random")
+    p_submit.add_argument("--streamers", type=str, default=None,
+                          help="Comma-separated streamer allowlist (e.g. Nati,Matafe_,Mande)")
+    p_submit.add_argument("--noise-limit", type=int, default=None,
+                          help="Cap how many crops_noise/ files are included (random sample)")
 
     p_poll = sub.add_parser("poll", help="Poll batch status")
     p_poll.add_argument("batch_id")
 
-    p_collect = sub.add_parser("collect", help="Collect results → labels_clean.csv")
+    p_collect = sub.add_parser("collect", help="Collect results -> labels_clean.csv")
     p_collect.add_argument("batch_id")
     p_collect.add_argument("--append", action="store_true", help="Append to existing labels_clean.csv instead of overwriting")
 
@@ -380,6 +448,10 @@ def main():
     p_run.add_argument("--limit", type=int, default=None, help="Max crops to submit")
     p_run.add_argument("--best", action="store_true",
                        help="Select highest-content crops (by file size) instead of random")
+    p_run.add_argument("--streamers", type=str, default=None,
+                       help="Comma-separated streamer allowlist (e.g. Nati,Matafe_,Mande)")
+    p_run.add_argument("--noise-limit", type=int, default=None,
+                       help="Cap how many crops_noise/ files are included (random sample)")
 
     sub.add_parser("extract_noise", help="Append EMPTY-labeled crops from batch_results.jsonl to labels_clean.csv")
 

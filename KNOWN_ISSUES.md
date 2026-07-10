@@ -1,5 +1,15 @@
 # Known Issues / Deferred Work
 
+> **⚠️ No longer the live tracker (2026-07-10).** This repo now tracks open work in **Beads** (`bd`),
+> per `CLAUDE.md`. The open items below were migrated to beads issues on 2026-07-10 — run `bd ready`
+> to see actionable work. This file is kept as the **historical record** (root-cause writeups, what
+> was found and how it was fixed). Do **not** add new deferred-work entries here; `bd create` instead.
+> Migrated open items → issues: name-canon `TesseractApexOCR-1gn`, empty-name ELO rows `-o1o`,
+> SAME_VICTIM_GUARD decision `-i1t`, icon-vote Layer 1 `-1t4` (blocked by `-1gn`), perceptual-hash
+> supplement `-457`, leaderboard garble cleanup `-az2`, CJK charset decision `-u63`,
+> `get_name_confidence_score` bug `-eun`, evaluator sampling noise `-668`, Gemini-queue decision
+> `-dj2`, Predator headed-browser `-cvp`.
+
 Running list of things flagged during development but deliberately not fixed at the time —
 usually because they're not blocking, or because fixing them properly needs a decision the
 user hasn't made yet. Add an entry whenever you'd otherwise just say "worth fixing later" in
@@ -11,6 +21,85 @@ Each entry should have enough context that someone (or some future Claude sessio
 it without re-reading old conversation history.
 
 ---
+
+## ~~Sticky ELO cap too permissive (kept 4 per chain)~~ TIGHTENED 2026-07-09 → cap 2 (Kill/BleedOut only)
+
+The pure-sticky bucket (a real elimination's line re-OCR'd many times, all one event_type) was the
+biggest ELO-inflation lever. It survived because `STICKY_ELO_EVENT_TYPES` chains only suppressed
+past the shared `STICKY_CHAIN_MAX_ROWS=4` — a same-pair Kill/BleedOut repeat inside the 150s chain
+window is never a legit second kill (victim can't respawn that fast), so keeping 4 double-counted.
+
+**Fix (2026-07-09):** added `STICKY_ELO_CHAIN_MAX_ROWS = 2` in `db_log.py`, used ONLY in the ELO
+branch of `insert_event` (`if event_type in STICKY_ELO_EVENT_TYPES`). Non-ELO (Knock) span/HARD_CAP
+logic is untouched. Takes effect on FUTURE collection (suppression is insert-time; see below).
+Test: `scratch/test_elo_cap.py` (4 checks, pass). Icon-vote suite still 20/20.
+
+**Sizing (measured, `scratch/measure_sticky_lever.py`, run2 = seg5 2026-07-09, 1122 ELO rows):**
+replaying survivors at a lower cap is faithful because live suppression only ever trims the chain
+tail. cap 4→3 removes 8.3%, **4→2 removes 21.4%**, 4→1 removes 44%. Chose 2 (not 1) as a
+conservative buffer. The `STICKY_CHAIN_MERGE_TYPES` flag was measured **inert** on the ELO-only
+population (identical survivor counts on/off) — it targets Kill↔Knock icon-flips, a different
+lever; it stays gated OFF. Gate-2 over-suppression check: the hit chains are all same/near-same
+tuple within ~150s (minsim 0.83–1.0), and distinct default-name players (axle1456 vs axle8599,
+ratio 0.5) stay below the 0.82 chain threshold so they never merge — safe.
+
+**The config change only bites future collection** (`detect_matches_from_db`/`reprocess.py` just
+SELECT survivors; all suppression is in `db_log.insert_event` at write time), so the existing DB was
+also retro-cleaned:
+
+**Retro clean EXECUTED 2026-07-10** (`scratch/retro_elo_cap2_cleanup.py`, backup
+`killfeed.db.bak_pre_elo_cap2_20260710_134337`): faithfully re-ran the new live suppression (ELO
+rows only, key=(streamer,event_type), sim>=0.82, gap<150s, keep first 2) over the WHOLE DB. Removed
+**955 ELO rows (24.7% of the 3868 ELO-eligible, 4.7% of all events); 20217 -> 19262**. Top chains
+were textbook sticky (`kpaubgsing->ofps vesoson`, `grepe->babytron` x9, len-22 BleedOut runs) — no
+distinct kills. `elo.db` rebuilt from the cleaned DB (`reprocess.py --dedupe`): 1337 players rated,
+89 with >=3 matches, ELO 622-1355; `--dedupe` also folded many of the measured jitter variants
+(`quick inmate.2 <- quio nmatez/quickinmate2`). Board is now consistent with the cap-2 policy.
+
+## Two more ELO-inflation leaks surfaced 2026-07-09 (sized, not yet fixed)
+
+Found while sizing the sticky cap (`scratch/measure_sticky_lever.py`):
+1. **Empty-attacker/victim ELO rows never sticky-suppressed** — 73/1122 (6.5%) of run2 ELO rows
+   have a blank attacker or victim, so the `if attacker and victim` guard in `insert_event` skips
+   them entirely (that Xlilfredson `->iclonerl eormvfi` line: 33 identical survivors). They also
+   can't credit a kill cleanly. Options: parse-time reject Kill rows missing a side, or a
+   name-blank-aware sticky path.
+2. **Residual name-jitter the cap can't fix** — **114 distinct excess rows (14.1% of 809 name-complete
+   cap-survivors), across 81 affected eliminations**: same real elimination, one side exact and the
+   other jittered BELOW the 0.82 chain threshold (`ilkgrz→quickinmate.2` ≈ `llkgr→quickinmate.2`;
+   `miosok→axlebbo1` ≈ `miosok→axie8b01`). Magnitude comparable to the 21% cap win, so the prize is
+   real — but it's the **unsupervised variant-folding** path (fold spellings of the same random name),
+   NOT name-seeding (only ~1% of killfeed names match the Predator CSV). See
+   [[elo_inflation_decomposition]].
+
+## Stem-aware multikill guard (SAME_VICTIM_GUARD) — implemented 2026-07-10, gated OFF
+
+Refinement to the cap-2 sticky suppression. cap=2 has a tiny over-suppression tail: a one-attacker
+**multikill of two default-named players** (`gibraltar2127` and `gibraltar1619` killed <150s apart)
+fuzzy-merges into one chain, so the 2nd real kill gets dropped as a "duplicate." A naive
+"only suppress if the victim matches a kept victim" guard is NO good — it can't tell a garbled
+victim from a different one, so it re-admits garble-stickies (measured: 58 rows re-admitted on run2,
+~56 of them junk). The **stem-aware** version (`db_log._distinct_default_name_victim`) keeps a row
+only when its victim shares a kept victim's alpha-stem but has clearly different digits — measured
+re-admits **just 3 rows** on run2 (keeps 99.7% of sticky-catching) while protecting the genuine
+multikill. Behind `config.SAME_VICTIM_GUARD` (default False; plain cap=2 stays the validated
+baseline). Residual risk if enabled: a sticky line whose victim *number* garbles read-to-read leaks
+~1 row per distinct garble. Test: `scratch/test_same_victim_guard.py` (8 checks). Measurement:
+`scratch/measure_sticky_lever.py` + the guard A/B comparison.
+
+## Perceptual-hash pre-OCR persistence filter — prototyped 2026-07-10, NOT viable as a replacement
+
+Tested whether hashing the killfeed-line crop can detect a static/sticky line at the pixel level
+(immune to OCR jitter), rather than deduping post-OCR (`scratch/proto_hash_persistence.py`, over the
+crop-backed sticky chains). Result: **the semi-transparent-overlay-over-moving-gameplay problem is
+real.** Full-color dHash: re-reads of the *identical* line differ by a median 18/64 bits; SAME-line
+p90 (33) exceeds DIFF-line median (31) → no usable threshold. Masking the text out with Otsu
+(`dhash_masked`) drives false-merges of distinct lines to **0%** (the dangerous direction is fixed),
+but **recall caps at ~40%** because the detection region itself jitters read-to-read and Otsu's
+cutoff drifts. **Verdict:** a masked-hash persistence gate is viable only as a HIGH-PRECISION
+SUPPLEMENT (cheaply catch the ~40% of stickies that hash-match, ~zero risk of eating a real kill),
+NOT a replacement for the text sticky-chain. Also the reason pixels can't rescue the multikill-vs-
+garble ambiguity (recall too low). Not built — logged as a possible future pre-OCR optimization.
 
 ## Killfeed zone calibration ported Gemini → Claude vision (2026-07-05); success still timing-bound
 

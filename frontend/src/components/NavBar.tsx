@@ -16,6 +16,7 @@ export default function NavBar() {
       </Link>
       <Link href="/" style={navLink}>Leaderboard</Link>
       <Link href="/matches" style={navLink}>Matches</Link>
+      <Link href="/timeline" style={navLink}>Timeline</Link>
     </nav>
   );
 }
