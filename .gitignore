@@ -11,6 +11,7 @@ __pycache__/
 cloudflared.exe
 .idea/
 .claude/
+edge_profile/
 
 # Databases & Logs
 elo.db*
@@ -23,6 +24,7 @@ crops_noise/
 wordlevel_crops/
 test_crops/
 labels/
+boundary_frames/
 debug_frame.png
 debug_bmap.png
 colab_bundle.zip
@@ -43,6 +45,12 @@ easyocr_dataset_v2/
 easyocr_dataset_v3/
 easyocr_lmdb_*
 
+# Synthetic word-level training data (bead gc3) — regenerable via synth_wordlevel.py / build_wordlevel_lmdb.py
+wordlevel_crops_synth/
+easyocr_dataset_synth/
+easyocr_dataset_synth_ready.zip
+labels/labels_wordlevel_synth.csv
+
 # Rolling DB/CSV/JSON backup snapshots (killfeed.db.bak_*, *.csv.bak_*, etc.)
 *.bak_*
 
@@ -54,3 +62,11 @@ scratch/*.jpg
 
 # Frontend build cache
 *.tsbuildinfo
+
+# Extracted Apex UI fonts (TypeType commercial IP; for local synthetic training only)
+fonts/apex/
+
+# Golden-game harness: bulky, regenerable crop images (the JSONL ground truth IS tracked)
+tools/golden/data/vod_capture/crops/
+tools/golden/data/kf_crops/
+tools/golden/data/**/reads.jsonl.orig
