@@ -28,7 +28,27 @@ def vmatch(a, b):
 
 # ---- GOLDEN: re-cluster vision kill/bleedout reads with prefix-aware merge (collapse over-splits)
 vr = [json.loads(l) for l in open(os.path.join(SP, "vision_reads.jsonl"), encoding="utf-8")]
-elim = [r for r in vr if r["kind"] in ("kill", "bleedout") and r.get("victim")]
+
+# Verified golden corrections (crop-checked reversible OVERLAY; vision_reads.jsonl is left UNTOUCHED).
+# Claude vision (opus, 1/sec) made two NON-kill misreads, each confirmed against the kf_crop pixels:
+#   t~536  "we lose to the 6'7 robot?"  = CHAT text overlaid on the death-recap screen (crop 0536.png),
+#                                         not a killfeed elimination.
+#   t~679  [LGMA] Superbadger10 -> [LIVE] Calamoriii = KNOCK only (gun icon, NO red skull in crop
+#                                         0679.png); the OCR pipeline correctly read it as a knock.
+# Both are dropped from the ground-truth denominator. NOTE the near-misses we did NOT drop: rCloudy@180
+# and reo@517 ARE real kills -- a red skull is clearly visible in crops 0180.png / 0517.png -- so they
+# remain in the golden as genuine OCR misses. Keyed tightly by (victim substring, t-window) so only the
+# two verified non-kill reads are removed.
+def _is_golden_misread(r):
+    vic = (r.get("victim") or "").lower()
+    t = r["t"]
+    if "we lose to" in vic and 530 <= t <= 545:            # chat misread as a kill
+        return True
+    if "calamor" in vic and 676 <= t <= 685 and r["kind"] == "kill":  # knock mislabeled as a kill
+        return True
+    return False
+
+elim = [r for r in vr if r["kind"] in ("kill", "bleedout") and r.get("victim") and not _is_golden_misread(r)]
 GAP = 120
 golden = []
 for r in sorted(elim, key=lambda x: x["t"]):

@@ -10,7 +10,10 @@ Sang's **win** on VOD `twitch.tv/videos/2819348747` @ offset `01:00:00` (~858s).
 (opus, 1 read/sec) transcribed the whole killfeed → **53 distinct eliminations** (of the ≥57
 floor; the rest are knock-only/feed-gap). This is the ground truth OCR is measured against.
 
-Baseline at last run: **recall 77%, precision 87%, attacker-name 92%** (OCR pipeline vs vision).
+Current at last run: **recall 90%, precision 85%, attacker-name 93%** (OCR pipeline vs vision;
+golden denominator = 51 after two crop-verified vision-misread corrections). Path from the 77%
+baseline is decomposed in `score_ocr.py` and the beads; the biggest single lever (respawn-gap in
+the collapse) is a HARNESS measurement and is reachable-pending the same fix in production db_log.
 
 ## data/
 

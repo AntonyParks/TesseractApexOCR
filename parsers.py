@@ -48,12 +48,17 @@ _NOTIFICATION_WORDS = {
 _LEGENDS_LOWER = {l.lower() for l in APEX_LEGENDS_CANONICAL}
 
 
-def _extract_positional_name(segment: str):
+def _extract_positional_name(segment: str, relax_floor: bool = False):
     """Extract a player name from a segment KNOWN to flank a kill/gun/[Bleed Out] marker, so it
     is a name BY POSITION. Keeps every token except game/notification vocabulary, clan tags,
     standalone legends and weapons; joins the survivors; then applies the minimum length to the
     WHOLE joined name (so "I AM HERE" = 7 chars qualifies as ONE name -- the min-length is
-    overall, not per token). Short OCR/clan garble ("reo", "TV", "bta") fails the overall gate."""
+    overall, not per token). Short OCR/clan garble ("reo", "TV", "bta") fails the overall gate.
+
+    relax_floor: drop the bare-name floor to the Apex 3-char minimum. Set ONLY by split_by_gun_icon
+    when an icon and a valid opposite-slot name are already confirmed, so the short token sits in a
+    trustworthy victim/attacker slot (e.g. "Shu" in "[BTA] reo <KILL_ICON> Shu") rather than being
+    free-floating 3-char OCR noise."""
     tokens = re.findall(r'[\[\(]?[A-Za-z0-9_./-]+[\]\)]?', segment)
     kept = []
     saw_clan = False                              # a clan tag flanks the name -> it's a real player
@@ -86,13 +91,14 @@ def _extract_positional_name(segment: str):
     # tag counts toward the length ("[BTA] reo" is really an 8-char name), so a clan-tagged name
     # is a confirmed real player -- allow it down to the Apex 3-char name minimum. Bare (untagged)
     # names still need 4, blocking untagged 3-char OCR garble (box/otc/lam) validated as still present.
-    floor = 3 if saw_clan else PLAYER_NAME_MIN_LENGTH
+    floor = 3 if (saw_clan or relax_floor) else PLAYER_NAME_MIN_LENGTH
     if len(re.sub(r'\s', '', name)) < floor:
         return None
     return name
 
 
-def extract_player_from_segment(segment: str, allow_compound: bool = False, positional: bool = False):
+def extract_player_from_segment(segment: str, allow_compound: bool = False, positional: bool = False,
+                                relax_floor: bool = False):
     """Extract player name from a segment.
 
     Handles:
@@ -114,7 +120,7 @@ def extract_player_from_segment(segment: str, allow_compound: bool = False, posi
     # position, so keep short/common-word names ("I AM HERE") and apply the min-length to the
     # WHOLE joined name, not per token. Free-floating text still uses the strict path below.
     if positional:
-        return _extract_positional_name(segment)
+        return _extract_positional_name(segment, relax_floor=relax_floor)
 
     # Extract tokens (including brackets)
     tokens = re.findall(r'[\[\(]?[A-Za-z0-9_./-]+[\]\)]?', segment)
@@ -230,6 +236,31 @@ def split_by_gun_icon(text: str, positional: bool = False) -> Tuple[str, Optiona
         if player:
             player_names.append((seg, player))  # Keep original segment + extracted name
 
+    # Structural short-name recovery: an icon split that produced exactly ONE valid name means the
+    # opposite slot is a real player in a confirmed kill/knock structure, but its name is only 3
+    # chars (below the bare floor) -- e.g. "[BTA] reo <KILL_ICON> Shu". Retry every segment with the
+    # relaxed 3-char floor; the icon + one confirmed name makes the short token trustworthy (not the
+    # free-floating 3-char OCR noise the bare floor is there to reject). positional only.
+    # Notification banners (location/supply/care-package reveals, spotted/shield lines) sometimes
+    # leak a spurious icon glyph; the strict floor normally starves them of a second name, but the
+    # relaxed retry below could rescue a 3-char fragment ("Set" <- "...RESET") into a fake kill. Gate
+    # the relaxed pass off whenever the line carries banner vocabulary, so relax only ever fires on a
+    # genuine two-name kill/knock structure.
+    _banner = bool(re.search(r'revealed|location|supply|spotted|shield|looted|care\s*package', text, re.IGNORECASE))
+    used_relax = False
+    if len(player_names) == 1 and positional and '<GUN_ICON>' in text and not _banner:
+        relaxed = []
+        for seg in segments:
+            seg = seg.strip()
+            if len(seg) < 3:
+                continue
+            p = extract_player_from_segment(seg, allow_compound=False, positional=True, relax_floor=True)
+            if p:
+                relaxed.append((seg, p))
+        if len(relaxed) >= 2:
+            player_names = relaxed
+            used_relax = True
+
     # Need at least 2 player names for attacker + victim
     if len(player_names) < 2:
         return text, None
@@ -239,8 +270,10 @@ def split_by_gun_icon(text: str, positional: bool = False) -> Tuple[str, Optiona
     attacker_segment, attacker_name = player_names[0]
     victim_segment, _ = player_names[-1]
 
-    # Re-extract victim with compound name support
-    victim_name = extract_player_from_segment(victim_segment, allow_compound=True, positional=positional)
+    # Re-extract victim with compound name support (carry the relaxed floor if we used it above so a
+    # 3-char victim like "Shu" survives the compound re-extract instead of being re-dropped).
+    victim_name = extract_player_from_segment(victim_segment, allow_compound=True, positional=positional,
+                                              relax_floor=used_relax)
 
     return attacker_name, victim_name
 
@@ -714,6 +747,29 @@ def _parse_killfeed_line_raw(line: str, db, timestamp: Optional[float] = None) -
     victim = None
     attacker_conf = 0.0
     victim_conf = 0.0
+
+    # "Champion <name> has been eliminated" / "<name> has been eliminated" banner: the NAMED player
+    # is the one who DIED. Some deaths carry no clean killfeed kill line (only a knock + this banner,
+    # e.g. Capn_Krispy), so surface the death with victim = the named player. Attacker is unknown from
+    # the banner, so use a dedicated event type that ELO and match-detection ignore (they gate strictly
+    # on Kill/BleedOut) -- this is a death SIGNAL for coverage, not an ELO-crediting kill.
+    if event_type == "Eliminated":
+        m = re.search(r'(?:champion\s+)?(.+?)\s+has\s*been\s*[ae]l[il1]m[il1]n', canonical, re.IGNORECASE)
+        if m:
+            vic_raw = re.sub(r'^(?:the\s+)?champion\s+', '', clean_player_name(m.group(1)),
+                             flags=re.IGNORECASE).strip()
+            if vic_raw and not is_invalid_player_name(vic_raw):
+                victim, victim_conf = db.normalize_player_name_with_confidence(vic_raw, timestamp)
+                if victim:
+                    return {
+                        "raw_line": line,
+                        "canonical": canonical,
+                        "event_type": "ChampionEliminated",
+                        "attacker": None,
+                        "victim": victim,
+                        "attacker_conf": 0.0,
+                        "victim_conf": victim_conf,
+                    }
 
     # For events that should have no victim (announcements)
     if event_type in NO_VICTIM_EVENTS:

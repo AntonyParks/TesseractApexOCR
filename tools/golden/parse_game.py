@@ -18,7 +18,7 @@ from parsers import parse_killfeed_line
 
 SP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 OUT = os.path.join(SP, "vod_capture")
-ELIM_TYPES = {"Kill", "BleedOut"}
+ELIM_TYPES = {"Kill", "BleedOut", "ChampionEliminated"}  # ChampionEliminated = death banner (victim-only)
 
 def norm(s):
     return re.sub(r"[^a-z0-9]", "", (s or "").lower())
@@ -45,16 +45,24 @@ def main():
         if et in ELIM_TYPES and not atk: n_drop_atk += 1
         parsed.append({"t": r["t"], "et": et, "atk": atk, "vic": vic, "raw": r["text"], "crop": r["crop"]})
 
-    # ---- transparent collapse of ELIMINATIONS by victim identity (a victim dies once/game) ----
-    # greedy: assign each elim read to an existing death if victim fuzzy-matches; else new death.
+    # ---- transparent collapse of ELIMINATIONS by victim identity ----
+    # A victim can die MORE THAN ONCE per game (respawn beacon / re-deploy), so we do NOT merge
+    # by name alone -- that over-merges a player's separate deaths into one (measured: chaosboy91,
+    # I AM HERE, Smurfette each merged 2-3 deaths spanning 300-600s). Merge only when the victim
+    # matches AND the read is within RESPAWN_GAP of the death's last read; a longer silence starts
+    # a NEW death. GAP mirrors the golden's own 120s re-cluster window (score_ocr.py) and is far
+    # larger than a single death's feed-lingering (<30s), so it never splits one death in two.
+    # NOTE: this is the HARNESS collapse only. Production db_log sticky-chain needs the same
+    # respawn-gap fix (beads 0zd/vmu) before these kills ship end-to-end.
     deaths = []   # {vic_norm, vic_disp, atk, t0, t1, n, ets:set, raws:[]}
     VIC_SIM = 0.82
+    RESPAWN_GAP = 120
     for p in [x for x in parsed if x["et"] in ELIM_TYPES]:
         vn = norm(p["vic"])
         if not vn: continue
         hit = None
         for d in deaths:
-            if fuzzy(vn, d["vic_norm"]) >= VIC_SIM:
+            if fuzzy(vn, d["vic_norm"]) >= VIC_SIM and p["t"] - d["t1"] <= RESPAWN_GAP:
                 hit = d; break
         if hit is None:
             deaths.append({"vic_norm": vn, "vic_disp": p["vic"], "atk": p["atk"], "t0": p["t"],
