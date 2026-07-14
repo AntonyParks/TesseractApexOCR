@@ -2,11 +2,12 @@
 
 import argparse
 import csv
+import os
 import re
 import sys
 import threading
 import time
-from collections import defaultdict, Counter
+from collections import defaultdict, Counter, deque
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from crop_saver import CropSaver
 from database import PlayerDatabase
 from detect_killfeed import detect_for_stream, detect_killfeed_from_frame, detect_content_x_bounds, open_stream, _get_frame_dimensions
 from detect_ranked import is_ranked_game
+from detect_squads import read_squads_left
 from parsers import parse_killfeed_line
 
 # ---------------------------------------------------------------------------
@@ -138,8 +140,12 @@ def detect_kill_skull(color_img, x0: int, x1: int) -> bool:
         if not (0.10 * H <= cents[i][1] <= 0.90 * H):
             continue
         fill = area / (cw * ch)
-        if not (0.45 <= fill <= 0.84):
-            continue  # solid bars/discs are too filled; scraggly tints too hollow
+        if not (0.45 <= fill <= 0.92):
+            continue  # scraggly tints too hollow; only a fully-solid bar/disc exceeds this, and
+            #           those are already caught by the size/aspect/orange/context gates below.
+            #           Upper bound raised 0.84->0.92 (2026-07-14): at 936p the skull renders more
+            #           solid (measured fill 0.88 on a confirmed kill incl. the game-winning kill,
+            #           validated vs the vision ground truth) than the 1080p 0.60-0.81 calibration.
         posx = (cx + cw / 2) / regW
         if not (0.50 <= posx <= 0.93):
             continue  # skull sits just left of the victim name at the gap's right end;
@@ -159,8 +165,12 @@ def detect_kill_skull(color_img, x0: int, x1: int) -> bool:
         sat = cv2.inRange(ctx_hsv, (0, 100, 60), (180, 255, 255))
         other_sat = cv2.countNonZero(sat) - cv2.countNonZero(red[by0:by1, bx0:bx1]) \
             - cv2.countNonZero(orange[by0:by1, bx0:bx1])
-        if other_sat > 0.25 * n_ctx:
-            continue
+        if other_sat > 0.45 * n_ctx:
+            continue  # colorful surroundings = game world bleeding through the translucent strip.
+            #           Raised 0.25->0.45 (2026-07-14): a real skull on a BRIGHT map (sky behind the
+            #           strip) measured ctx_sat 0.42 (the game-winning kill), dropped as a knock. The
+            #           skull-specific shape/size/pos/orange gates above carry the precision; validated
+            #           recall-up / precision-flat on the vision ground truth via _score_ocr.
         return True
     return False
 
@@ -653,6 +663,38 @@ class ChannelWorker(threading.Thread):
         self._last_calib_attempt: float = 0.0
         self._calib_attempts: int = 0
         self._calib_candidate: dict | None = None   # first-strike zone, awaiting confirmation
+        # Match-boundary frame capture (data collection for future squad-eliminated/placement/
+        # lobby screen detection; see config.SAVE_BOUNDARY_FRAMES). Independent of killfeed
+        # detection -- these screens replace the killfeed entirely, so capture unconditionally.
+        self._last_boundary_capture: float = 0.0
+        # Squads-left observed-placement tracking (bead hmz, log-only). Monotonic non-increasing over
+        # a match; a LARGE jump UP (e.g. 3 -> 18) means a new match. Small ups (16->18) are OCR digit
+        # misreads (6<->8) -- smoothed out by requiring a value to repeat before committing.
+        self._last_squads_read: float = 0.0
+        self._squads_left: int | None = None
+        self._squads_pending: int | None = None
+        self._squads_pending_n: int = 0   # consecutive confirming reads for the pending candidate
+        self._squads_pending_ts: float = 0.0  # wall-clock when the current decrease candidate was FIRST
+                                               # seen -- the real wipe is ~here, not at (lagged) commit
+        # Placement correlation (bead hmz): a squads-left DECREMENT means a squad in this lobby was
+        # wiped (placing Nth). Correlate it with the killfeed elimination(s) that caused it. FIRST
+        # goal per advisor -- TEST COVERAGE: do decrements coincide with captured elims at all (the
+        # feed is comprehensive but our OCR capture of it is not)? Log-only; attribution/ELO later.
+        self._recent_elims: deque = deque(maxlen=60)   # (epoch_ts, victim) for Kill/BleedOut
+        self._decr_total: int = 0
+        self._decr_with_elims: int = 0
+        # A committed decrement is correlated LATER, not at commit: an elim only enters _recent_elims
+        # when flush_old_events fires (EVENT_WINDOW=6s after its last read), but a decrement can commit
+        # ~1-4s after the wipe, BEFORE its causing elims have flushed in. So queue the decrement and
+        # evaluate coverage once the elims have matured. Each entry: (anchor_ts, drop, placed_from, to).
+        self._pending_placements: list = []
+        # Event-triggered squads re-read: an elimination makes a squads-left decrement likely, so read
+        # the counter right after one (min 1s apart) instead of only every SQUADS_TRACK_INTERVAL_SECONDS.
+        # Cheaper than a uniform fast grid (fires only when kills happen) and pins the read ~1s from the
+        # finishing kill, tightening the decrement<->elim correlation window. Killfeed OCR already runs
+        # ~2x/s/stream, so one extra squads read per kill-cluster is marginal cost.
+        self._squads_read_asap: bool = False
+        self._squads_lowres_logged: bool = False   # one-time notice when a sub-900p stream is skipped
 
     def stop(self):
         self._stop.set()
@@ -742,6 +784,15 @@ class ChannelWorker(threading.Thread):
         if container is None:
             return
 
+        # A stream can open but expose no video track (observed live on 'Notworkinmd', 2026-07-10):
+        # container.demux(video=0) then raises IndexError from the for-statement's iterator setup,
+        # BEFORE any try/except below, crashing the worker thread ungracefully. Guard it here so a
+        # no-video stream degrades exactly like an unopenable one — return and let the parent's
+        # worker-died rotation handle it. (bd TesseractApexOCR-rba)
+        if not container.streams.video:
+            print(f"[{self.streamer}] ERROR: stream has no video track — dropping, rotating.")
+            return
+
         print(f"[{self.streamer}] Stream opened. Detecting killfeed regions...")
 
         # Get frame dimensions from stream metadata
@@ -822,8 +873,119 @@ class ChannelWorker(threading.Thread):
                         continue
                     last_process = now
 
+                    # Drain matured placement decrements (bead hmz): evaluate coverage once the causing
+                    # elims have had time to flush into _recent_elims (EVENT_WINDOW + margin after the
+                    # wipe). The window is time-anchored, so a late evaluation is exact.
+                    if self._pending_placements:
+                        _mature = EVENT_WINDOW + 3
+                        _still = []
+                        for anchor, drop, pfrom, pto in self._pending_placements:
+                            if now - anchor < _mature:
+                                _still.append((anchor, drop, pfrom, pto))
+                                continue
+                            lead = SQUADS_TRACK_INTERVAL_SECONDS + 2   # wipe precedes the visible drop
+                            vics = [v for (t, v) in self._recent_elims if t >= anchor - lead]
+                            self._decr_total += 1
+                            if vics:
+                                self._decr_with_elims += 1
+                            cov = f"{self._decr_with_elims}/{self._decr_total}"
+                            print(f"[Placement:{self.streamer}] {drop} squad(s) wiped "
+                                  f"(placed ~{pfrom}..{pto + 1}); {len(vics)} elim(s) in "
+                                  f"~{now - (anchor - lead):.0f}s window: {vics[-4:]}  "
+                                  f"[decr-coverage {cov}]")
+                        self._pending_placements = _still
+
                     frame_bgra = frame.to_ndarray(format='bgra')
                     fh_cur, fw_cur = frame_bgra.shape[:2]
+
+                    if SAVE_BOUNDARY_FRAMES and now - self._last_boundary_capture >= BOUNDARY_FRAME_INTERVAL_SECONDS:
+                        self._last_boundary_capture = now
+                        boundary_dir = BOUNDARY_FRAME_DIR / self.streamer
+                        boundary_dir.mkdir(parents=True, exist_ok=True)
+                        cv2.imwrite(
+                            str(boundary_dir / f"{int(now)}.jpg"),
+                            cv2.cvtColor(frame_bgra, cv2.COLOR_BGRA2BGR),
+                        )
+
+                    # Squads-left observed-placement tracking (bead hmz, log-only). Read the top-right
+                    # 'N SQUADS LEFT' HUD ~every SQUADS_TRACK_INTERVAL_SECONDS and log transitions.
+                    _since_squads = now - self._last_squads_read
+                    _squads_due = _since_squads >= SQUADS_TRACK_INTERVAL_SECONDS          # slow baseline
+                    _squads_evt = self._squads_read_asap and _since_squads >= 1.0         # after a kill, min 1s
+                    _squads_lowres = fh_cur < SQUADS_MIN_FRAME_HEIGHT   # counter OCRs too poorly below ~900p
+                    if SQUADS_TRACK_ENABLED and _squads_lowres and not self._squads_lowres_logged:
+                        print(f"[Squads:{self.streamer}] skipping squads reads — "
+                              f"{fw_cur}x{fh_cur} below {SQUADS_MIN_FRAME_HEIGHT}p (HUD counter unreliable)")
+                        self._squads_lowres_logged = True
+                    if SQUADS_TRACK_ENABLED and not _squads_lowres and (_squads_due or _squads_evt):
+                        self._last_squads_read = now
+                        _evt_read = self._squads_read_asap
+                        self._squads_read_asap = False
+                        sq, pl, _raw = read_squads_left(
+                            frame_bgra,
+                            lambda reg: ocr_with_easyocr(preprocess_for_easyocr(reg)[0]),
+                        )
+                        if os.environ.get("SQUADS_DEBUG"):
+                            print(f"[SqDbg:{self.streamer}] t={now:.1f} sq={sq} pl={pl} "
+                                  f"cur={self._squads_left} pend={self._squads_pending} "
+                                  f"evt={int(_evt_read)} raw={_raw!r}")
+                        if sq is not None:
+                            cur = self._squads_left
+                            # Smoothing that survives event-triggered fast reads. squads-left is
+                            # monotonically non-increasing within a match, so:
+                            #   * DECREASE (sq < cur): accumulate consecutive below-cur, non-increasing
+                            #     reads and commit once enough agree. A lone digit misread-down
+                            #     (18->16) bounces back up next read (-> 18 == cur), resetting the
+                            #     count, so it never commits; a real decline (10->9->8) keeps reading
+                            #     lower and commits. GRADUATED confirmation: a small drop needs 2
+                            #     reads, a large drop needs 3-4 -- this kills tens-digit misreads
+                            #     (11->1, drop 10) without hard-rejecting a genuine big drop after a
+                            #     menu/None gap (which would strand cur at a stale high value forever).
+                            #   * INCREASE (sq > cur): only a LARGE jump (>=5) is a new match, confirmed
+                            #     by two identical reads; small increases are OCR misreads, ignored.
+                            committed = False
+                            new_match = False
+                            if cur is None:
+                                committed = True
+                            elif sq == cur:
+                                self._squads_pending = None
+                                self._squads_pending_n = 0
+                            elif sq < cur:
+                                if self._squads_pending is not None and sq <= self._squads_pending:
+                                    self._squads_pending_n += 1
+                                else:
+                                    self._squads_pending_n = 1
+                                    self._squads_pending_ts = now   # first sight of THIS drop ~= wipe time
+                                self._squads_pending = sq       # track the latest (lowest) candidate
+                                drop = cur - self._squads_pending
+                                need = 2 if drop <= 4 else (3 if drop <= 7 else 4)
+                                if self._squads_pending_n >= need:
+                                    committed = True
+                            else:  # sq > cur
+                                if sq - cur >= 5:
+                                    if self._squads_pending == sq:
+                                        committed = True
+                                        new_match = True
+                                    else:
+                                        self._squads_pending = sq
+                                        self._squads_pending_n = 1
+                                # small increase -> OCR misread, ignore
+                            if committed:
+                                print(f"[Squads:{self.streamer}] {cur} -> {sq} squads left"
+                                      f"{f', {pl} players' if pl else ''}"
+                                      f"{' (new match)' if new_match else ''}")
+                                # Placement-correlation (bead hmz): a DECREASE means cur-sq squad(s)
+                                # were wiped, placing ~cur..sq+1. Queue it; coverage is evaluated later
+                                # (see the drain above) once the causing elims have flushed into
+                                # _recent_elims. Anchor at when the drop was FIRST seen (~the wipe), not
+                                # this (lagged) commit.
+                                if cur is not None and sq < cur:
+                                    anchor = self._squads_pending_ts or now
+                                    self._pending_placements.append((anchor, cur - sq, cur, sq))
+                                self._squads_left = sq
+                                self._squads_pending = None
+                                self._squads_pending_n = 0
+                                self._squads_pending_ts = 0.0
 
                     # Re-detect killfeed position on this frame
                     new_regions = detect_killfeed_from_frame(
@@ -1044,6 +1206,12 @@ class ChannelWorker(threading.Thread):
                     get_queue().enqueue(crop, best_text, self.streamer, event_time)
                 except Exception as e:
                     print(f"[{self.streamer}] Gemini enqueue error: {e}")
+
+            # Buffer eliminations for placement correlation (bead hmz). A squad wipe -> squads-left
+            # decrement is triggered by an elimination; keep a short rolling window to match against.
+            if parsed["event_type"] in ("Kill", "BleedOut") and (parsed["victim"] or "").strip():
+                self._recent_elims.append((event_time, parsed["victim"].strip()))
+                self._squads_read_asap = True   # re-read squads-left soon (a decrement is likely)
 
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(event_time))
             print(

@@ -26,7 +26,73 @@ WEAPON_KEYWORDS = [
 NO_VICTIM_EVENTS = ["SuggestLocation", "Ping", "Audio", "Scan", "ShieldBroken", "MyShieldBroken", "Eliminated", "LootedCarePackage"]
 
 
-def extract_player_from_segment(segment: str, allow_compound: bool = False):
+# Game/notification vocabulary that is NEVER a player name, even in a structured kill line.
+# This is the BLOCKLIST used in positional mode (segments flanking a gun/kill/[Bleed Out]
+# marker, which are names by position): everything NOT in here is allowed as (part of) a name,
+# so a real player literally named "I AM HERE" is kept, while a garbled "Enemy Shield Broken"
+# line still can't yield a name (enemy/shield/broken are all here). Generic English filler
+# (here, you, the, guy, ...) is deliberately EXCLUDED so it can be a name. The overall min-length
+# check (applied to the WHOLE joined name, not per token) is what rejects short garble.
+_NOTIFICATION_WORDS = {
+    "spotted", "pinged", "enemy", "enemies", "reviving", "broken", "bleed", "shield",
+    "eliminated", "leader", "kill", "kills", "knocked", "finisher", "killer", "headshot",
+    "champion", "care", "package", "loot", "looted", "looting", "contained", "containing",
+    "crafting", "materials", "items", "supply", "upgrades", "upgrade", "banner", "location",
+    "suggested", "revealed", "map", "audio", "area", "defend", "avoid", "attack", "watch",
+    "ping", "hitted", "level", "lvl", "mag", "extended", "dibs", "canceled", "ring", "squad",
+    "teammate", "stream", "unreadable", "nerf", "nerfs", "subscribe", "fridge", "samsung",
+    "crafting", "akimbo", "rounds", "elevator", "connoisseur", "connnissaiir", "lonnolsseur",
+    "melee", "compromise", "compromised", "lacation", "focation", "beam", "out", "revealedl",
+    "directly", "clearly", "gettingt", "pushed", "gettingshotun", "spottedan", "anenemy",
+}
+_LEGENDS_LOWER = {l.lower() for l in APEX_LEGENDS_CANONICAL}
+
+
+def _extract_positional_name(segment: str):
+    """Extract a player name from a segment KNOWN to flank a kill/gun/[Bleed Out] marker, so it
+    is a name BY POSITION. Keeps every token except game/notification vocabulary, clan tags,
+    standalone legends and weapons; joins the survivors; then applies the minimum length to the
+    WHOLE joined name (so "I AM HERE" = 7 chars qualifies as ONE name -- the min-length is
+    overall, not per token). Short OCR/clan garble ("reo", "TV", "bta") fails the overall gate."""
+    tokens = re.findall(r'[\[\(]?[A-Za-z0-9_./-]+[\]\)]?', segment)
+    kept = []
+    saw_clan = False                              # a clan tag flanks the name -> it's a real player
+    for token in tokens:
+        had_brackets = token.startswith('[') or token.startswith('(')
+        clean = re.sub(r'[\[\]\(\)]', '', token).strip('.,;:!?-_=|')
+        if not clean:
+            continue
+        low = clean.lower()
+        if low in _NOTIFICATION_WORDS:            # game vocab is never a name
+            continue
+        if 'icon' in low and len(low) <= 12:      # gun/kill-icon marker fragment leak
+            continue
+        if is_weapon_or_attachment(clean):
+            continue
+        if low in _LEGENDS_LOWER:                 # legend name: keep only if anonymized
+            if had_brackets:
+                kept.append(token)                # bracketed anonymized legend, e.g. [valk]
+            elif re.search(r'\d{4}$', clean):
+                kept.append(clean)                # legend+4digits, e.g. Octane1234
+            continue                              # standalone legend -> skip
+        if had_brackets and len(clean) <= 4:      # short bracketed non-legend token = clan tag
+            saw_clan = True
+            continue
+        kept.append(clean)
+    if not kept:
+        return None
+    name = ' '.join(kept)
+    # OVERALL minimum length: the min-4 floor exists to reject 1-3 char OCR-noise names. A clan
+    # tag counts toward the length ("[BTA] reo" is really an 8-char name), so a clan-tagged name
+    # is a confirmed real player -- allow it down to the Apex 3-char name minimum. Bare (untagged)
+    # names still need 4, blocking untagged 3-char OCR garble (box/otc/lam) validated as still present.
+    floor = 3 if saw_clan else PLAYER_NAME_MIN_LENGTH
+    if len(re.sub(r'\s', '', name)) < floor:
+        return None
+    return name
+
+
+def extract_player_from_segment(segment: str, allow_compound: bool = False, positional: bool = False):
     """Extract player name from a segment.
 
     Handles:
@@ -44,6 +110,11 @@ def extract_player_from_segment(segment: str, allow_compound: bool = False):
     if not segment or len(segment) < 3:
         return None
 
+    # Structured kill line (segment flanks a gun/kill/[Bleed Out] marker): it is a name by
+    # position, so keep short/common-word names ("I AM HERE") and apply the min-length to the
+    # WHOLE joined name, not per token. Free-floating text still uses the strict path below.
+    if positional:
+        return _extract_positional_name(segment)
 
     # Extract tokens (including brackets)
     tokens = re.findall(r'[\[\(]?[A-Za-z0-9_./-]+[\]\)]?', segment)
@@ -93,7 +164,7 @@ def extract_player_from_segment(segment: str, allow_compound: bool = False):
             continue
 
         # Not a legend name, check if invalid
-        if is_invalid_player_name(clean_token):
+        if is_invalid_player_name(clean_token, positional=positional):
             _short_prefix = None
             continue
 
@@ -118,7 +189,7 @@ def extract_player_from_segment(segment: str, allow_compound: bool = False):
         return valid_tokens[0]
 
 
-def split_by_gun_icon(text: str) -> Tuple[str, Optional[str]]:
+def split_by_gun_icon(text: str, positional: bool = False) -> Tuple[str, Optional[str]]:
     """Split killfeed text into attacker and victim using gun icons as separators.
 
     Strategy:
@@ -155,7 +226,7 @@ def split_by_gun_icon(text: str) -> Tuple[str, Optional[str]]:
             continue
 
         # Try to extract player name from segment
-        player = extract_player_from_segment(seg, allow_compound=False)
+        player = extract_player_from_segment(seg, allow_compound=False, positional=positional)
         if player:
             player_names.append((seg, player))  # Keep original segment + extracted name
 
@@ -169,12 +240,12 @@ def split_by_gun_icon(text: str) -> Tuple[str, Optional[str]]:
     victim_segment, _ = player_names[-1]
 
     # Re-extract victim with compound name support
-    victim_name = extract_player_from_segment(victim_segment, allow_compound=True)
+    victim_name = extract_player_from_segment(victim_segment, allow_compound=True, positional=positional)
 
     return attacker_name, victim_name
 
 
-def parse_kill_event(attacker_text: str, victim_text: str, db, timestamp):
+def parse_kill_event(attacker_text: str, victim_text: str, db, timestamp, positional: bool = False):
     """Parse attacker and victim from split killfeed text.
 
     Args are already-extracted player names, just need normalization.
@@ -185,13 +256,81 @@ def parse_kill_event(attacker_text: str, victim_text: str, db, timestamp):
     attacker_conf = 0.0
     victim_conf = 0.0
 
-    if attacker_text and not is_invalid_player_name(attacker_text):
+    if attacker_text and not is_invalid_player_name(attacker_text, positional=positional):
         attacker, attacker_conf = db.normalize_player_name_with_confidence(attacker_text, timestamp)
 
-    if victim_text and not is_invalid_player_name(victim_text):
+    if victim_text and not is_invalid_player_name(victim_text, positional=positional):
         victim, victim_conf = db.normalize_player_name_with_confidence(victim_text, timestamp)
 
     return attacker, victim, attacker_conf, victim_conf
+
+
+# Matches any single kill/gun icon-gap marker, including char-vote-mangled forms.
+_ICON_ANY_RE = re.compile(r'<\s*(?:kill|gun)[_\s]*icon\s*>|\b(?:gun|kill)icon\b', re.IGNORECASE)
+
+
+def _is_pure_digit_name(name: str) -> bool:
+    """True for a pure-digit PLAYER name (4+ digits, no letters), e.g. "949930934".
+
+    Distinct from the 1-3 digit ammo/HUD counts rejected by is_weapon_or_attachment and the
+    blanket all-digit reject in is_invalid_player_name (a HUD-noise guard). A 4+-digit run is
+    too long to be an ammo/kill/squad counter and is, in a clean kill line, a player who chose
+    a numeric name.
+    """
+    return bool(re.fullmatch(r'\d{4,}', (name or '').strip()))
+
+
+def _try_clean_digit_kill(line: str, canonical: str, db, timestamp, gun_line_type: str):
+    """Recover a kill dropped only because one side is a pure-digit player name (bead 2b5).
+
+    parse_kill_event / split_by_gun_icon reject all-digit tokens via is_invalid_player_name (a
+    HUD-noise guard for RP totals / kill+squad counters), which also discards legit numeric
+    player names -- losing the WHOLE skull-confirmed kill even though the other side is a valid
+    name. In a STRUCTURE-CLEAN line (exactly ONE icon marker splitting into exactly two
+    non-empty sides, >=1 side a real alphabetic name) an all-digit token is a real name, not
+    HUD noise, so accept it and assign both sides to their correct slots.
+
+    The single-icon gate keeps multi-icon HUD rows out: RP-counter rows ("11 8 <GUN> 3043
+    <KILL> +138 RP ...") and kill-leader banners carry 2-3 markers -> not handled here, still
+    parse to None. Returns a parsed-dict on recovery, else None (existing logic proceeds).
+    Splits on the RAW line, not canonical, to avoid fix_missing_spaces camel-splitting a name
+    like "Pathfinder8438" into "Pathfinder 8438".
+    """
+    if not KNOCK_KILL_DISTINCTION:
+        return None
+    if len(_ICON_ANY_RE.findall(line)) != 1:
+        return None
+    parts = _ICON_ANY_RE.split(line)
+    if len(parts) != 2:
+        return None
+    left, right = clean_player_name(parts[0].strip()), clean_player_name(parts[1].strip())
+    if not left or not right:
+        return None
+    ld, rd = _is_pure_digit_name(left), _is_pure_digit_name(right)
+    if not (ld or rd):
+        return None  # no digit side -> the normal path already handles (or correctly rejects) it
+    lv = not ld and not is_invalid_player_name(left) and not is_weapon_or_attachment(left)
+    rv = not rd and not is_invalid_player_name(right) and not is_weapon_or_attachment(right)
+    if not ((lv or ld) and (rv or rd)):
+        return None  # some side is neither a valid name nor a clean digit name -> HUD noise/garbage
+    if not (lv or rv):
+        return None  # require >=1 REAL alphabetic name (reject digit-vs-digit, e.g. counter rows)
+    attacker, attacker_conf = db.normalize_player_name_with_confidence(left, timestamp)
+    victim, victim_conf = db.normalize_player_name_with_confidence(right, timestamp)
+    if not attacker or not victim or attacker.lower() == victim.lower():
+        return None
+    return {
+        "raw_line": line,
+        "canonical": canonical,
+        "event_type": gun_line_type,
+        "attacker": attacker,
+        "victim": victim,
+        "attacker_conf": attacker_conf,
+        "victim_conf": victim_conf,
+        # Tells the parse_killfeed_line wrapper not to re-reject a pure-digit name it just
+        # deliberately accepted (the wrapper otherwise re-runs is_invalid_player_name).
+        "_digit_ok": True,
+    }
 
 
 def remove_clan_tag(name: str) -> str:
@@ -246,7 +385,10 @@ def fix_missing_spaces(s: str) -> str:
 
 def normalize_brackets(s: str) -> str:
     """Normalize bracket tags."""
-    s = re.sub(r"\[b[il]ee?d\s*[qodgc]ut\]", "[Bleed Out]", s, flags=re.IGNORECASE)
+    # Tolerate OCR garble of the "Out" tail: the last 't' is frequently mis-read (Our/Oul/Oux)
+    # or dropped (Ou), and the 'O' reads as o/0/q/d/g/c. Anchored on "bleed", so widening the
+    # tail is safe. Catches [Bleed Out]/[Bleed Our]/[Bleed Ou]/[Bleed 0ut]/bracketless variants.
+    s = re.sub(r"\[?\s*b[il]ee?d\s*[oqdgc0]?u[a-z]?\s*\]?", "[Bleed Out]", s, flags=re.IGNORECASE)
     s = re.sub(r"\[bla?ed\s*out\]", "[Bleed Out]", s, flags=re.IGNORECASE)
     s = re.sub(r"\[blg\s", "[Bleed ", s, flags=re.IGNORECASE)
 
@@ -273,10 +415,19 @@ def is_weapon_or_attachment(name: str) -> bool:
         return False
 
     name_low = name.lower()
+    name_compact = re.sub(r'[^a-z0-9]', '', name_low)
 
-    # Check against weapon keywords
+    # Match weapon keywords as WHOLE tokens, not substrings. Substring matching (the old behavior)
+    # false-flagged any player name CONTAINING a short weapon keyword -- e.g. "mag" (magazine) inside
+    # "maggie8793" (Mad Maggie anonymized player), "eva" in "evan", "car" in "oscar", "volt" in
+    # "revolt" -- silently dropping real names (measured: a large share of empty-side BleedOut rows,
+    # 2026-07-11 audit). Flag only when the whole name IS the weapon (compact, so "r-99"=="r99") or the
+    # weapon appears delimited by non-alphanumerics.
     for weapon in WEAPON_KEYWORDS:
-        if weapon in name_low:
+        wl = weapon.lower()
+        if name_compact == re.sub(r'[^a-z0-9]', '', wl):
+            return True
+        if re.search(rf'(?<![a-z0-9]){re.escape(wl)}(?![a-z0-9])', name_low):
             return True
 
     # Check for ammo patterns like "48", "96", "120" (common ammo counts)
@@ -286,8 +437,15 @@ def is_weapon_or_attachment(name: str) -> bool:
     return False
 
 
-def is_invalid_player_name(name: str) -> bool:
-    """Check if a name is actually a game event artifact."""
+def is_invalid_player_name(name: str, positional: bool = False) -> bool:
+    """Check if a name is actually a game event artifact.
+
+    positional=True: the name came from a segment flanking a gun/kill/[Bleed Out] marker, so it
+    is a player by structure. Generic filler words (here/you/the/...) are then valid names;
+    only true notification/game vocabulary (_NOTIFICATION_WORDS) still rejects, and the 3+-word
+    guard is lifted (multi-word names are real). Non-positional keeps the strict legacy behavior
+    (rejects the whole invalid_patterns list, 3+-word names) for free-floating text.
+    """
     if not name:
         return True
 
@@ -330,6 +488,7 @@ def is_invalid_player_name(name: str) -> bool:
         "eliminated", "leader", "kill", "new", "with", "kills", "looted",
         "that", "contained", "has", "been", "pinged", "loot", "reviving",
         "champion", "are", "and", "guy", "looking", "people", "compromise",
+        "nerf", "nerfs",  # recurring 'nerf seer pls' banner misparsed as a Kill (bead az2)
         "compromised", "lacation", "focation", "area", "over", "defend",
         "avoid", "this", "looting", "from", "full", "beam", "for", "since",
         "fridge", "samsung", "subscribe", "crafting", "ready",
@@ -339,7 +498,9 @@ def is_invalid_player_name(name: str) -> bool:
         "directly", "clearly", "getting", "gettingt", "pushed",
     ]
 
-    if name_low in invalid_patterns:
+    # In a structured kill line, a generic-filler name (I AM HERE, "you", ...) is a real player;
+    # only genuine notification/game vocabulary (in _NOTIFICATION_WORDS) still rejects it there.
+    if name_low in invalid_patterns and not (positional and name_low not in _NOTIFICATION_WORDS):
         return True
 
     # Check if it's a weapon/attachment
@@ -361,8 +522,9 @@ def is_invalid_player_name(name: str) -> bool:
     if re.search(r'[/<>\\|]', name):
         return True
 
-    # Sentence fragments: Apex names don't have 3+ words
-    if len(name.split()) >= 3:
+    # Sentence fragments: Apex names don't have 3+ words -- relaxed for a structured kill line,
+    # where a multi-word name ("I AM HERE", "225 Bench Press Manifestation") is a real player.
+    if not positional and len(name.split()) >= 3:
         return True
 
     if len(name) < 3:
@@ -402,15 +564,22 @@ def parse_killfeed_line(line: str, db, timestamp: Optional[float] = None) -> Dic
     attacker_conf = res.get("attacker_conf", 0.0)
     victim_conf = res.get("victim_conf", 0.0)
 
+    # A pure-digit name deliberately accepted by _try_clean_digit_kill must not be re-rejected
+    # here by the all-digit guard inside is_invalid_player_name (bead 2b5).
+    digit_ok = res.get("_digit_ok", False)
+    # A filler/short name deliberately accepted from a structured kill line (gun/bleed marker)
+    # must be re-checked in positional mode too, or the wrapper re-rejects "I AM HERE" etc.
+    positional_ok = res.get("_positional_ok", False)
+
     # Clean up legend leaks/weapons/invalid names from normalized attacker
-    if attacker:
-        if is_invalid_player_name(attacker) or is_weapon_or_attachment(attacker):
+    if attacker and not (digit_ok and _is_pure_digit_name(attacker)):
+        if is_invalid_player_name(attacker, positional=positional_ok) or is_weapon_or_attachment(attacker):
             attacker = None
             attacker_conf = 0.0
 
     # Clean up legend leaks/weapons/invalid names from normalized victim
-    if victim:
-        if is_invalid_player_name(victim) or is_weapon_or_attachment(victim):
+    if victim and not (digit_ok and _is_pure_digit_name(victim)):
+        if is_invalid_player_name(victim, positional=positional_ok) or is_weapon_or_attachment(victim):
             victim = None
             victim_conf = 0.0
 
@@ -471,11 +640,11 @@ def _parse_killfeed_line_raw(line: str, db, timestamp: Optional[float] = None) -
 
     # EARLY CHECK: Try to split by gun icon for kill events
     # This handles format: "attacker <gun_icon> victim"
-    attacker_part, victim_part = split_by_gun_icon(canonical)
+    attacker_part, victim_part = split_by_gun_icon(canonical, positional=True)
 
     if victim_part:  # Successfully split into two parts
         # This is likely a kill event
-        attacker, victim, attacker_conf, victim_conf = parse_kill_event(attacker_part, victim_part, db, timestamp)
+        attacker, victim, attacker_conf, victim_conf = parse_kill_event(attacker_part, victim_part, db, timestamp, positional=True)
 
         if attacker and victim:
             return {
@@ -486,7 +655,16 @@ def _parse_killfeed_line_raw(line: str, db, timestamp: Optional[float] = None) -
                 "victim": victim,
                 "attacker_conf": attacker_conf,
                 "victim_conf": victim_conf,
+                "_positional_ok": True,
             }
+
+    # Structure-clean digit-name kill recovery (bead 2b5): the normal split above drops kills
+    # where one side is a pure-digit player name (is_invalid_player_name's all-digit HUD-noise
+    # guard). Recover those in a clean single-icon 2-side line before falling through to the
+    # event-type detection below. No-op for every non-digit line (returns None).
+    _dk = _try_clean_digit_kill(line, canonical, db, timestamp, gun_line_type)
+    if _dk:
+        return _dk
 
     # Special handling for care packages - no victim
     if "care package" in low and "containing" in low:
@@ -630,30 +808,32 @@ def _parse_killfeed_line_raw(line: str, db, timestamp: Optional[float] = None) -
             "victim_conf": 0.0,
         }
 
-    # Extract [Bleed Out] kills
-    m = re.search(
-        r"([A-Za-z0-9_.\-/\[\]]+)\s+\[bleed out\]\s*([A-Za-z0-9_.\-/\[\]]+)",
-        canonical,
-        re.IGNORECASE,
-    )
-    if m:
-        attacker_raw = clean_player_name(m.group(1))
-        victim_raw = clean_player_name(m.group(2))
-
-        if not is_invalid_player_name(attacker_raw):
-            attacker, attacker_conf = db.normalize_player_name_with_confidence(attacker_raw, timestamp)
-        if not is_invalid_player_name(victim_raw):
-            victim, victim_conf = db.normalize_player_name_with_confidence(victim_raw, timestamp)
-
-        return {
-            "raw_line": line,
-            "canonical": canonical,
-            "event_type": event_type,
-            "attacker": attacker,
-            "victim": victim,
-            "attacker_conf": attacker_conf,
-            "victim_conf": victim_conf,
-        }
+    # Extract [Bleed Out] kills. Format is "attacker [Bleed Out] victim". The old approach required a
+    # single literal-bracketed token on each side, which silently dropped a name whenever OCR garbled
+    # the brackets, jammed them against a name ("name[Bleed Out]"), or left noise tokens adjacent to
+    # the marker ("murmu m Bleed Out odk") -- measured 2026-07-11 as ~57% of BleedOut rows losing a
+    # side. Instead split on the marker (bracket-optional, OCR-tolerant) and reuse
+    # extract_player_from_segment on each side, which already skips noise/short-prefix tokens and
+    # keeps legend+number anonymized players (e.g. Wraith1234) that the old path rejected.
+    if "bleed" in low:
+        bo = re.split(r"\[?\s*b[li]ee?d\s*[oqdgc0]?ut\s*\]?", canonical, maxsplit=1, flags=re.IGNORECASE)
+        if len(bo) == 2:
+            left_name = extract_player_from_segment(bo[0], allow_compound=False, positional=True)
+            right_name = extract_player_from_segment(bo[1], allow_compound=True, positional=True)
+            if left_name and not is_invalid_player_name(left_name, positional=True):
+                attacker, attacker_conf = db.normalize_player_name_with_confidence(left_name, timestamp)
+            if right_name and not is_invalid_player_name(right_name, positional=True):
+                victim, victim_conf = db.normalize_player_name_with_confidence(right_name, timestamp)
+            return {
+                "raw_line": line,
+                "canonical": canonical,
+                "event_type": event_type,
+                "attacker": attacker,
+                "victim": victim,
+                "attacker_conf": attacker_conf,
+                "victim_conf": victim_conf,
+                "_positional_ok": True,
+            }
 
     # Extract "PlayerName: Reviving PlayerName2"
     if event_type == "Revive":
