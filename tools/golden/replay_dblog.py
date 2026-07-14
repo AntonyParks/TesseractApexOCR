@@ -23,8 +23,8 @@ import db_log
 from database import PlayerDatabase
 from parsers import parse_killfeed_line
 from golden_lib import DATA, norm, xmatch, build_golden, GAP
-from db_log import (STICKY_ELO_CHAIN_MAX_ROWS, STICKY_CHAIN_GAP_SECONDS,
-                    STICKY_SEED_LOOKBACK_SECONDS, STICKY_SIM_THRESHOLD, STICKY_VIC_ANCHOR_SIM)
+from db_log import (STICKY_CHAIN_GAP_SECONDS, STICKY_SEED_LOOKBACK_SECONDS,
+                    STICKY_SIM_THRESHOLD, STICKY_VIC_ANCHOR_SIM)
 
 ELIM_TYPES = {"Kill", "BleedOut", "ChampionEliminated"}
 EPOCH0 = 1_700_000_000          # arbitrary fixed base; video-time t maps to EPOCH0 + t
@@ -79,6 +79,16 @@ def score(golden, deaths, label):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="Replay golden reads through db_log dedup and score.")
+    ap.add_argument("--cap", type=int, default=None,
+                    help="override STICKY_ELO_CHAIN_MAX_ROWS (e.g. --cap 1 as a positive control: it "
+                         "SHOULD start suppressing with-attacker respawns, proving the harness detects "
+                         "db_log losses when they exist).")
+    args = ap.parse_args()
+    if args.cap is not None:
+        db_log.STICKY_ELO_CHAIN_MAX_ROWS = args.cap   # read at call-time in insert_event
+
     reads = [json.loads(l) for l in open(os.path.join(DATA, "vod_capture", "reads.jsonl"), encoding="utf-8")]
     reads.sort(key=lambda r: r["t"])
     golden = build_golden()
@@ -126,17 +136,18 @@ def main():
     db_deaths = collapse(surv)
     harness_deaths = collapse(parsed_elims)   # what parse_game.py would produce (no db_log layer)
 
+    # Store the per-death match flags ON each golden dict (NOT in a t0-keyed dict -- t=517 has TWO
+    # distinct golden deaths, reo and Smurfette, which would collide and mask one).
     m_hn, miss_hn, spur_hn = score(golden, harness_deaths, "harness")
-    hn_ok = {g["t0"]: (g["_hit"] is not None) for g in golden}       # capture before the next pass mutates _hit
-    for g in golden: g.pop("_hit", None)
+    for g in golden: g["_hn_ok"] = g["_hit"] is not None
     m_db, miss_db, spur_db = score(golden, db_deaths, "db_log")
-    db_ok = {g["t0"]: (g["_hit"] is not None) for g in golden}
+    for g in golden: g["_db_ok"] = g["_hit"] is not None
 
     G = len(golden)
     print("=" * 78)
     print("PRODUCTION db_log DEDUP  scored against  VISION GOLDEN   (Sang's win, respawn-aware)")
     print("=" * 78)
-    print(f"config: STICKY_ELO_CHAIN_MAX_ROWS={STICKY_ELO_CHAIN_MAX_ROWS}  CHAIN_GAP={STICKY_CHAIN_GAP_SECONDS}s"
+    print(f"config: STICKY_ELO_CHAIN_MAX_ROWS={db_log.STICKY_ELO_CHAIN_MAX_ROWS}  CHAIN_GAP={STICKY_CHAIN_GAP_SECONDS}s"
           f"  SEED_LOOKBACK={STICKY_SEED_LOOKBACK_SECONDS}s  SIM={STICKY_SIM_THRESHOLD}  VIC_ANCHOR={STICKY_VIC_ANCHOR_SIM}")
     print(f"elim reads fed to db_log: {fed}   rows KEPT: {kept}   rows SUPPRESSED: {fed - kept}")
     print()
@@ -156,7 +167,7 @@ def main():
         seen[norm(g["vic"])] += 1
         g["_death_ordinal"] = seen[norm(g["vic"])]
 
-    lost = [g for g in golden if hn_ok[g["t0"]] and not db_ok[g["t0"]]]
+    lost = [g for g in golden if g["_hn_ok"] and not g["_db_ok"]]
     print(f"\n--- deaths the PARSE HARNESS captured but db_log DEDUP SUPPRESSED: {len(lost)} ---")
     for g in sorted(lost, key=lambda x: x["t0"]):
         tag = f"  (respawn death #{g['_death_ordinal']})" if g["_death_ordinal"] > 1 else ""
@@ -167,15 +178,15 @@ def main():
     #   db_log-LOST    : OCR captured it (harness has it) but db_log SUPPRESSED it -> a real dedup cost
     #   never-captured : OCR never got it (harness misses it too) -> not a db_log problem at all
     respawns = [g for g in golden if g["_death_ordinal"] > 1]
-    r_kept = [g for g in respawns if db_ok[g["t0"]]]
-    r_dblost = [g for g in respawns if hn_ok[g["t0"]] and not db_ok[g["t0"]]]
+    r_kept = [g for g in respawns if g["_db_ok"]]
+    r_dblost = [g for g in respawns if g["_hn_ok"] and not g["_db_ok"]]
     print(f"\n--- respawn re-deaths (victim dies >1x): {len(respawns)} total | "
           f"db_log KEPT {len(r_kept)} | db_log SUPPRESSED {len(r_dblost)} | never-captured-by-OCR "
           f"{len(respawns) - len(r_kept) - len(r_dblost)} ---")
     for g in sorted(respawns, key=lambda x: x["t0"]):
-        if db_ok[g["t0"]]:       status = "KEPT          "
-        elif hn_ok[g["t0"]]:     status = "db_log-LOST    "
-        else:                    status = "never-captured "
+        if g["_db_ok"]:       status = "KEPT          "
+        elif g["_hn_ok"]:     status = "db_log-LOST    "
+        else:                 status = "never-captured "
         print(f"     [{status}] t={g['t0']:4d}  {g['vic'][:28]:<28} (death #{g['_death_ordinal']})")
 
     print(f"\n--- db_log SPURIOUS distinct deaths (survived dedup, no golden match): {len(spur_db)} ---")
