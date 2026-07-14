@@ -43,6 +43,16 @@ python tools/golden/parse_game.py
 python tools/golden/score_ocr.py
 ```
 
+**Measure the PRODUCTION db_log sticky-chain dedup** (the ELO-feeding suppression) against ground
+truth -- replays the golden reads through the real `db_log.insert_event` (driving its clock from
+video-time) into a throwaway DB, then scores survivors. Use before touching any sticky constant:
+```
+python tools/golden/replay_dblog.py     # read-only; elo.db / killfeed.db untouched
+```
+Reports recall/precision with vs without the dedup layer, and a respawn spotlight (KEPT /
+db_log-LOST / never-captured). Baseline finding: at cap-2 the dedup suppresses 0 OCR-captured
+respawns -- the cap-2 buffer (not cap-1) is what preserves them; tightening would regress here.
+
 **Debug why a skull is missed** on one crop:
 ```
 python tools/golden/skull_diag.py tools/golden/data/vod_capture/crops/00756.1_r0.png
