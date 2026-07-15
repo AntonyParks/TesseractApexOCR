@@ -242,11 +242,17 @@ def main():
           f"(rows counted raw by match_detector; the displayed kill STAT is inflated this much)")
     print(f"deaths captured but attacker-less (NO killer credited): {len(atkless)}   "
           f"(victim death recorded, but no player gets the ELO kill)")
-    print(f"\nPLACEMENT (what the RATING actually uses -- player-keyed, so duplicate rows do NOT inflate):")
-    print(f"  matches detected: {len(matches)}   distinct players eliminated: {len(elim_players)}"
-          f"   vs golden distinct deaths: {len(golden)}")
+    # The pairwise ELO rating is driven by elimination_order, which is PLAYER-keyed -- so db_log's
+    # duplicate cap-2 rows cluster at the same victim/time and do NOT reorder distinct players (they
+    # can't inflate the rating). That is the boundary-#1 answer. The count below is COVERAGE (a player
+    # was eliminated SOMEWHERE), NOT proof the relative survival ORDER is correct -- see the caveat.
+    print(f"\nRATING (pairwise, elimination_order is PLAYER-keyed -> cap-2 duplicates do NOT inflate it):")
+    print(f"  players eliminated (coverage, not ordering): {len(elim_players)} vs golden deaths {len(golden)}")
     print(f"  ELO KillEvents credited (raw): {total_credited}  across {len(credited_kills)} attackers"
           f"   vs golden creditable deaths: {golden_creditable}")
+    print(f"  CAVEAT: match_detector split this ONE game into {len(matches)} chunks (recursive stitch"
+          f" splitter; only ~2 real >90s kill-gaps exist) -> pairwise comparisons are confined WITHIN"
+          f" chunks, a SEPARATE rating distortion, orthogonal to db_log dedup and UNMEASURED here.")
     top = sorted(credited_kills.items(), key=lambda x: -x[1])[:6]
     print("  top credited attackers (raw kill count -- watch for cap-2 doubling):")
     for a, c in top:

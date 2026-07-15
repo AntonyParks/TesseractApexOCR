@@ -52,10 +52,13 @@ python tools/golden/replay_dblog.py     # read-only; elo.db / killfeed.db untouc
 Reports recall/precision with vs without the dedup layer, a respawn spotlight (KEPT /
 db_log-LOST / never-captured), and a BOUNDARY #1 section that runs the survivors through the real
 match_detector -> elo path. Findings: at cap-2 the dedup suppresses 0 OCR-captured respawns (the
-cap-2 buffer, not cap-1, is what preserves them; tightening regresses here); ELO PLACEMENT (the
-rating) recovers 50/51 players and is NOT inflated by duplicate rows (player-keyed), but the
+cap-2 buffer, not cap-1, is what preserves them; tightening regresses here); db_log's duplicate
+cap-2 rows do NOT inflate the pairwise ELO rating (elimination_order is player-keyed), but the
 displayed total_kills STAT is over-counted ~1.5x because match_detector counts raw rows and cap-2
 keeps ~2 per death. `--cap 1` is a positive control that makes the harness show suppression.
+CAVEAT: the harness also shows match_detector splitting the one game into ~5 chunks (recursive
+stitch splitter; only ~2 real >90s kill-gaps exist) -- a SEPARATE rating distortion, orthogonal to
+db_log dedup and unmeasured here. "Rating unaffected by dedup" is NOT "rating correct".
 
 **Debug why a skull is missed** on one crop:
 ```
