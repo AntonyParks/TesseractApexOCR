@@ -195,11 +195,14 @@ def detect_matches(
             etype = (row.get("event_type") or "").strip()
             attacker = row.get("attacker") or None
             victim = row.get("victim") or None
-            # A creditable elimination needs BOTH names -- for Kill as well as BleedOut. An empty-victim
-            # "Kill" means nobody died: it's a persistent HUD/sticky line OCR'd as a kill (measured on
-            # live data: 10.7% of Kill rows, 16% of credited leaderboard kills, whole players fabricated
-            # -- bead o1o). Crediting those inflates the leaderboard. Require attacker AND victim.
-            if etype not in ("Kill", "BleedOut") or not (attacker and victim):
+            # A Kill needs a VICTIM (a death drives survival-order placement); the ATTACKER is optional
+            # -- a real kill whose attacker OCR dropped/garbled still tells us the victim died at this
+            # kill_order, and it credits no one (elo_engine's stat loop guards on k.attacker). But an
+            # empty-VICTIM "Kill" means nobody died: a persistent HUD/sticky line OCR'd as a kill
+            # (measured: 10.7% of Kill rows, 16% of credited leaderboard kills, whole players fabricated
+            # -- bead o1o) -> drop it. BleedOut still needs BOTH: a single-sided bleed-out name is
+            # ambiguous which side (the lone name may be the victim sitting in the attacker field).
+            if not ((etype == "Kill" and victim) or (etype == "BleedOut" and attacker and victim)):
                 continue
 
             ts = _parse_ts(row.get("timestamp", ""))
@@ -318,9 +321,9 @@ def detect_matches_from_db(
         """
         SELECT streamer, timestamp, attacker, victim, attacker_conf, victim_conf
         FROM events
-        WHERE event_type IN ('Kill', 'BleedOut')
-          AND attacker IS NOT NULL AND TRIM(attacker) != ''
-          AND victim   IS NOT NULL AND TRIM(victim)   != ''
+        WHERE ((event_type = 'Kill' AND victim IS NOT NULL AND TRIM(victim) != '')
+               OR (event_type = 'BleedOut' AND attacker IS NOT NULL AND TRIM(attacker) != ''
+                   AND victim IS NOT NULL AND TRIM(victim) != ''))
           AND source IN ('trocr', 'easyocr')
         ORDER BY timestamp ASC
         """
