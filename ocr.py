@@ -34,6 +34,7 @@ from database import PlayerDatabase
 from detect_killfeed import detect_for_stream, detect_killfeed_from_frame, detect_content_x_bounds, open_stream, _get_frame_dimensions
 from detect_ranked import is_ranked_game
 from detect_squads import read_squads_left
+import rank_gate
 from parsers import parse_killfeed_line
 
 # ---------------------------------------------------------------------------
@@ -728,6 +729,49 @@ class ChannelWorker(threading.Thread):
                 pass
         return False
 
+    def _sample_is_master_pred(self, container: av.container.Container) -> bool:
+        """Master/Predator daily gate (bead 2mo). Classify this streamer's rank ONCE per day from
+        IN-GAME frames -- the rank badge only renders during a live match; menus/lobbies lack it and
+        their red UI would false-trigger Predator. Cache the tier for the day; a below-Master streamer
+        is re-checked the next day (they may have ranked up). Colour-only (rank_gate), no OCR of the
+        badge -- the only OCR here is the squads-HUD read that confirms the frame is in-game."""
+        cached = rank_gate.cached_tier(self.streamer)
+        if cached is not None:
+            return rank_gate.should_collect(cached)
+
+        def ocr_region(reg):
+            proc = preprocess_for_easyocr(reg)[0]
+            return ocr_with_easyocr(proc, color_img=reg)
+
+        votes: list[str] = []
+        checked = 0
+        for packet in container.demux(video=0):
+            if checked >= MASTER_PRED_MAX_FRAMES or len(votes) >= MASTER_PRED_MIN_INGAME:
+                break
+            try:
+                for frame in packet.decode():
+                    checked += 1
+                    arr = frame.to_ndarray(format='bgra')
+                    squads, _, _ = read_squads_left(arr, ocr_region)
+                    if squads is None:
+                        break                       # not in-game -> don't classify off a lobby/menu frame
+                    bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+                    votes.append(rank_gate.classify_frame(bgr))
+                    break                           # one frame per packet
+            except Exception:
+                pass
+
+        tier = rank_gate.aggregate(votes, min_votes=MASTER_PRED_MIN_INGAME)
+        if tier is None:
+            # too few in-game frames (streamer still in lobby) -> undecided; do NOT cache, retry later.
+            print(f"[{self.streamer}] Master/Pred check: only {len(votes)} in-game frame(s) — retrying.")
+            return False
+        rank_gate.set_tier(self.streamer, tier)
+        keep = rank_gate.should_collect(tier)
+        print(f"[{self.streamer}] Rank classified {tier} (cached today) — "
+              f"{'collecting' if keep else 'skipping (re-check tomorrow)'}.")
+        return keep
+
     def _detect_killfeed(self, container: av.container.Container,
                          fw: int, fh: int) -> list[dict]:
         """Keep sampling frames until >= DETECT_MIN_LINES regions are found."""
@@ -752,10 +796,13 @@ class ChannelWorker(threading.Thread):
                 return regions
 
             if RANKED_STREAMS_ONLY:
-                if self._sample_is_ranked(container):
+                gate_ok = (self._sample_is_master_pred(container) if MASTER_PRED_ONLY
+                           else self._sample_is_ranked(container))
+                if gate_ok:
                     not_ranked_streak = 0
                     print(f"[{self.streamer}] Detection attempt {attempt}: "
-                          f"only {len(regions)} line(s) found — ranked game active, retrying...")
+                          f"only {len(regions)} line(s) found — "
+                          f"{'master/pred' if MASTER_PRED_ONLY else 'ranked'} game active, retrying...")
                 else:
                     not_ranked_streak += 1
                     if not_ranked_streak >= RANKED_NOT_RANKED_STREAK:

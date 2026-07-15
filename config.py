@@ -452,11 +452,39 @@ if USE_CUSTOM_APEX_MODEL:
 else:
     TESSERACT_CONFIG = "--oem 3 --psm 7 -l eng"
 
+# ==================== SQUADS-LEFT / OBSERVED PLACEMENT (bead hmz) ====================
+# Read the top-right 'N SQUADS LEFT' HUD to observe placement directly instead of inferring it from
+# kill-order (match_detector.get_player_survival). Reader validated 6/6 on fresh frames (detect_squads).
+# Currently LOG-ONLY: it tracks the per-stream squads-left time series so the monotonic-decrease
+# behavior and killfeed correlation can be validated live before wiring placement into the ELO engine
+# (that step also needs the squad-wipe boundary from bead 0ef).
+SQUADS_TRACK_ENABLED          = True
+SQUADS_TRACK_INTERVAL_SECONDS = 8        # per-stream cadence; bounds the extra OCR cost
+SQUADS_MIN_FRAME_HEIGHT       = 900      # skip squads reads below this vertical res (720p etc.): the
+                                         # small HUD counter OCRs too poorly on low-res streams to trust
+                                         # (verified: a 720p 'N SQUADS LEFT' reads as '81sobs LeRT'),
+                                         # and a false decrement corrupts an ELO placement.
+
 # ==================== V2 CONFIG ====================
 SAVE_CROPS = True                        # Enable crop saving during live capture
 CROP_OUTPUT_DIR = Path("crops")           # Root dir; streamer subdirs created automatically
 CROP_DEDUP_WINDOW = 30.0                  # Seconds within which duplicate crops are suppressed
 CROP_PHASH_THRESHOLD = 8                  # Max Hamming distance to consider two crops identical
+
+# ==================== MATCH-BOUNDARY FRAME CAPTURE (data collection) ====================
+# Matches are currently segmented purely by a kill-event time gap (see match_detector.GAP_SECONDS),
+# which over-fragments real games during long lulls (looting/rotating with no kills). The plan is
+# to instead detect actual game-UI state transitions -- "YOUR SQUAD HAS BEEN ELIMINATED", the
+# post-match placement/summary screen, the main lobby/menu -- as ground-truth match boundaries.
+# No classifier exists for these yet; this is step 1, collecting raw full-frame examples to look at
+# before designing one (OCR keyword search vs extending calibrate_zone.py's Claude vision
+# classifier -- undecided, see KNOWN_ISSUES.md / bd issue for match-boundary detection).
+SAVE_BOUNDARY_FRAMES = False                      # Master toggle for this capture step
+# Disabled 2026-07-11: the collection run (step 1) is complete — the gameplay-vs-not-gameplay binary
+# design was validated against the captured sample (see bd TesseractApexOCR-0ef). Re-enable only if a
+# fresh full-frame sample is needed (e.g. to train/eval the eventual vision classifier).
+BOUNDARY_FRAME_INTERVAL_SECONDS = 20              # Per-streamer cadence; keeps disk/volume bounded
+BOUNDARY_FRAME_DIR = Path("boundary_frames")      # Root dir; streamer subdirs created automatically
 
 # ==================== EASYOCR ====================
 USE_EASYOCR = True                       # Use EasyOCR (CRAFT + CRNN) as the primary local OCR engine
@@ -508,6 +536,14 @@ RANKED_NOT_RANKED_WAIT   = 120    # Seconds to wait when not in ranked before re
 RANKED_NOT_RANKED_STREAK = 3      # Consecutive not-ranked checks before waiting
 RANKED_MAX_WAIT_CYCLES   = 5      # Max wait cycles before giving up and rotating to next streamer
 
+# Master/Predator-only collection (bead 2mo). When True, the ranked-stream gate additionally requires
+# the streamer to be MASTER or PREDATOR (badge colour: purple / red -- see rank_gate.py), classified
+# ONCE per day per streamer from IN-GAME frames and cached (rank_cache.json). Below-Master streamers
+# are re-checked the next day (they may rank up). Requires RANKED_STREAMS_ONLY.
+MASTER_PRED_ONLY         = True   # Only collect Master/Predator streamers
+MASTER_PRED_MAX_FRAMES   = 40     # Frames to sample per daily classification before giving up
+MASTER_PRED_MIN_INGAME   = 3      # In-game frames (squads-HUD present) needed to decide a tier
+
 # ==================== GEMINI VALIDATION ====================
 GEMINI_VALIDATE           = False  # DISABLED 2026-07-09: Gemini free tier is dead (429s); leaving
                                    # it on just hammers a dead API and spams errors every kill. The
@@ -524,6 +560,14 @@ GEMINI_CORRECTION_DIR    = Path("labels/gemini_corrections")  # Crops where Gemi
 GEMINI_CONFIRMED_DIR     = Path("labels/gemini_confirmed")    # Crops where both agree
 
 # ==================== LANGUAGE DETECTION ====================
+# Restrict auto-discovery to a single Twitch broadcaster language at the SOURCE (Helix /streams
+# `language` filter, BCP-47 code e.g. "en"). Set to None/"" to watch all languages. Chosen "en"
+# 2026-07-10: non-English clients render game-UI banners in that language (e.g. Japanese
+# "敵を11回スキャン"), which breaks OCR-keyword match-boundary detection and pollutes the
+# leaderboard with non-EN-region play. This gates stream SELECTION only; the reactive
+# NON_ENGLISH_DETECTION below is a second line of defense for killfeed CONTENT that slips through
+# (a broadcaster tagged "en" can still have CJK/Cyrillic player names in the feed).
+STREAM_LANGUAGE        = "en"  # Twitch broadcaster_language filter for --top discovery; None = all
 NON_ENGLISH_DETECTION  = True  # Detect streams with non-Latin script (CJK, Cyrillic, etc.)
 NON_ENGLISH_THRESHOLD  = 5     # Consecutive non-Latin OCR lines before flagging channel
 SKIP_NON_ENGLISH_CROPS = True  # Suppress crop saving for flagged channels

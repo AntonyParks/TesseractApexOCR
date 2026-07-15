@@ -7,6 +7,7 @@ __pycache__/
 
 # Local Configs & Executables
 .env
+rank_cache.json
 .env.local
 cloudflared.exe
 .idea/
