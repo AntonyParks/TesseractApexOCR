@@ -62,8 +62,18 @@ DEDUP_WINDOW_SECONDS = 20
 # is deliberately left EXACT (fuzzy there could drop a real second kill within the window).
 STICKY_CHAIN_GAP_SECONDS = 150   # max gap between inserts for them to count as one chain
 STICKY_CHAIN_MAX_ROWS    = 4     # rows allowed per chain before suppression kicks in
-STICKY_SEED_LOOKBACK_SECONDS = 600  # DB lookback used to seed chain length on a cold key
-STICKY_SIM_THRESHOLD = 0.82      # fuzzy ratio to treat two jittered reads as the same line
+STICKY_SEED_LOOKBACK_SECONDS = 1800 # DB lookback used to seed chain length on a cold key
+                                    # (widened from 600s so a persistent line whose re-reads are
+                                    # minutes apart still seeds a suppressing chain -- bead 0ef)
+STICKY_SIM_THRESHOLD = 0.82      # fuzzy ratio to treat two jittered reads as the same line (full pair)
+# VICTIM-ANCHORED chaining (bead 0ef, 2026-07-14): the full-pair signature above is defeated by
+# attacker name-jitter -- a persistent line "grape [Bleed Out] cerb" re-read as crao/babyuon/2i.grape
+# ->cerb never chains, so cap suppression never fires (measured: ~41% of kill rows were such re-reads).
+# Since a victim can only die once (until a multi-minute respawn), repeated rows with the SAME victim
+# are sticky re-reads regardless of attacker jitter, while a real multikill has DIFFERENT victims and
+# is never merged. So also treat two reads as the same line when their VICTIMS match >= this ratio
+# (guarded by _distinct_default_name_victim so gibraltar2127 vs gibraltar1619 stay distinct).
+STICKY_VIC_ANCHOR_SIM = 0.85
 
 # Legit same-pair REPEATS inside the chain window differ by event type (measured 2026-07-05):
 #  - Kill / BleedOut FEED ELO, and a player can't be re-killed until they respawn (a beacon takes
@@ -136,11 +146,13 @@ def _line_sig(attacker: str, victim: str) -> str:
     return _NORM_RE.sub("", (attacker or "").lower()) + "|" + _NORM_RE.sub("", (victim or "").lower())
 
 
-def _seed_cluster(conn, streamer, event_type, sig, now, merge_types=False) -> tuple[int, Optional[int]]:
+def _seed_cluster(conn, streamer, event_type, sig, now, merge_types=False, vic_norm="") -> tuple[int, Optional[int]]:
     """Seed a cold cluster's length + last row id by fuzzy-matching recent DB rows for this line,
-    so a worker restart doesn't reset an active sticky chain. Bounded to the lookback window.
-    merge_types=True seeds across ALL event types (Layer 2: one physical line's kill/knock/
-    bleedout reads share a chain) -- see DESIGN_persistence_aware_icon_vote.md."""
+    so a worker restart doesn't reset an active sticky chain -- and so a persistent line whose
+    re-reads are minutes apart (beyond the in-memory chain gap) still seeds a suppressing chain.
+    Matches full-pair fuzzy OR victim-anchored (attacker jitter) like the live chain. Bounded to
+    the lookback window. merge_types=True seeds across ALL event types (Layer 2: one physical
+    line's kill/knock/bleedout reads share a chain) -- see DESIGN_persistence_aware_icon_vote.md."""
     if merge_types:
         rows = conn.execute(
             "SELECT id, attacker, victim FROM events WHERE streamer=? "
@@ -155,9 +167,16 @@ def _seed_cluster(conn, streamer, event_type, sig, now, merge_types=False) -> tu
         ).fetchall()
     count = 0
     last_id = None
+    kept_vics: list = []
     for r in rows:
-        if SequenceMatcher(None, sig, _line_sig(r["attacker"], r["victim"])).ratio() >= STICKY_SIM_THRESHOLD:
+        rv = _NORM_RE.sub("", (r["victim"] or "").lower())
+        full = SequenceMatcher(None, sig, _line_sig(r["attacker"], r["victim"])).ratio() >= STICKY_SIM_THRESHOLD
+        vic = bool(vic_norm) and bool(rv) and SequenceMatcher(None, vic_norm, rv).ratio() >= STICKY_VIC_ANCHOR_SIM \
+            and not (vic_norm and kept_vics and _distinct_default_name_victim(vic_norm, kept_vics))
+        if full or vic:
             count += 1
+            if rv and rv not in kept_vics:
+                kept_vics.append(rv)
             if last_id is None:       # rows are DESC, so the first match is the latest row
                 last_id = r["id"]
     return count + 1, last_id
@@ -352,13 +371,24 @@ def insert_event(
             # Drop clusters whose last insert is older than the chain gap (chain broken).
             clusters[:] = [c for c in clusters if now - c["ts"] < STICKY_CHAIN_GAP_SECONDS]
 
-            match = next(
-                (c for c in clusters
-                 if SequenceMatcher(None, sig, c["sig"]).ratio() >= STICKY_SIM_THRESHOLD),
-                None,
-            )
+            def _same_sticky_line(c) -> bool:
+                # Full-pair fuzzy match (original behavior)...
+                if SequenceMatcher(None, sig, c["sig"]).ratio() >= STICKY_SIM_THRESHOLD:
+                    return True
+                # ...OR victim-anchored: same victim as one kept in this chain (attacker may jitter),
+                # unless it's a genuinely distinct default-name victim (stem-aware multikill guard).
+                if vic_norm and any(
+                    SequenceMatcher(None, vic_norm, kv).ratio() >= STICKY_VIC_ANCHOR_SIM
+                    for kv in c["vics"]
+                ):
+                    if not (SAME_VICTIM_GUARD and _distinct_default_name_victim(vic_norm, c["vics"])):
+                        return True
+                return False
+
+            match = next((c for c in clusters if _same_sticky_line(c)), None)
             if match is None:
-                seed_len, seed_id = _seed_cluster(conn, streamer, event_type, sig, now, STICKY_CHAIN_MERGE_TYPES)
+                seed_len, seed_id = _seed_cluster(conn, streamer, event_type, sig, now,
+                                                  STICKY_CHAIN_MERGE_TYPES, vic_norm)
                 # "vics": distinct victims KEPT in this chain, for the stem-aware multikill guard.
                 match = {"sig": sig, "ts": now, "start": now, "len": seed_len, "id": seed_id,
                          "vics": [vic_norm]}
