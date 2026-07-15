@@ -745,6 +745,7 @@ class ChannelWorker(threading.Thread):
 
         votes: list[str] = []
         checked = 0
+        last_badge = None                           # (crop, red, pur) of the last in-game frame, for sampling
         for packet in container.demux(video=0):
             if checked >= MASTER_PRED_MAX_FRAMES or len(votes) >= MASTER_PRED_MIN_INGAME:
                 break
@@ -756,7 +757,10 @@ class ChannelWorker(threading.Thread):
                     if squads is None:
                         break                       # not in-game -> don't classify off a lobby/menu frame
                     bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
-                    votes.append(rank_gate.classify_frame(bgr))
+                    badge = rank_gate._crop_badge(bgr)
+                    red, pur = rank_gate._band_fracs(badge)
+                    votes.append(rank_gate.classify_from_bands(red, pur))
+                    last_badge = (badge, red, pur)
                     break                           # one frame per packet
             except Exception:
                 pass
@@ -767,6 +771,8 @@ class ChannelWorker(threading.Thread):
             print(f"[{self.streamer}] Master/Pred check: only {len(votes)} in-game frame(s) — retrying.")
             return False
         rank_gate.set_tier(self.streamer, tier)
+        if RANK_GATE_SAMPLE_LOG and last_badge is not None:  # passive cross-rank sample capture (incl. Diamond in OTHER)
+            rank_gate.record_sample(self.streamer, tier, last_badge[1], last_badge[2], last_badge[0])
         keep = rank_gate.should_collect(tier)
         print(f"[{self.streamer}] Rank classified {tier} (cached today) — "
               f"{'collecting' if keep else 'skipping (re-check tomorrow)'}.")

@@ -54,6 +54,14 @@ RED_FRAC = 0.015
 PUR_FRAC = 0.015
 
 
+def classify_from_bands(red: float, pur: float) -> str:
+    if pur >= PUR_FRAC and pur >= red:
+        return "MASTER"
+    if red >= RED_FRAC and red > pur:
+        return "PRED"
+    return "OTHER"
+
+
 def classify_frame(frame_bgr: np.ndarray) -> str:
     """Classify a single IN-GAME frame's rank badge: 'PRED' | 'MASTER' | 'OTHER'.
 
@@ -61,11 +69,29 @@ def classify_frame(frame_bgr: np.ndarray) -> str:
     since menus/lobbies lack the badge and their red UI false-triggers PRED.
     """
     red, pur = _band_fracs(_crop_badge(frame_bgr))
-    if pur >= PUR_FRAC and pur >= red:
-        return "MASTER"
-    if red >= RED_FRAC and red > pur:
-        return "PRED"
-    return "OTHER"
+    return classify_from_bands(red, pur)
+
+
+# --------------------------------------------------------------------------------------------------
+# Optional debug sampling: save each classified streamer's badge crop + measured fractions, so a
+# collection run passively builds a labelled cross-rank set (esp. the OTHER bucket -> Diamond/Plat/
+# Gold) to validate the purple/blue boundary without a dedicated capture pass.
+# --------------------------------------------------------------------------------------------------
+_SAMPLE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rank_samples")
+_SAMPLE_LOG = os.path.join(_SAMPLE_DIR, "samples.jsonl")
+
+
+def record_sample(streamer: str, tier: str, red: float, pur: float, badge_bgr: np.ndarray) -> None:
+    try:
+        os.makedirs(_SAMPLE_DIR, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        fn = f"{(streamer or '').lower()}_{tier}_{ts}.png"
+        cv2.imwrite(os.path.join(_SAMPLE_DIR, fn), badge_bgr)
+        with open(_SAMPLE_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"streamer": streamer, "tier": tier, "red": round(red, 4),
+                                "pur": round(pur, 4), "date": _today(), "crop": fn}) + "\n")
+    except OSError:
+        pass
 
 
 def aggregate(votes: list[str], min_votes: int = 3) -> str | None:

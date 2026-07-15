@@ -543,6 +543,10 @@ RANKED_MAX_WAIT_CYCLES   = 5      # Max wait cycles before giving up and rotatin
 MASTER_PRED_ONLY         = True   # Only collect Master/Predator streamers
 MASTER_PRED_MAX_FRAMES   = 40     # Frames to sample per daily classification before giving up
 MASTER_PRED_MIN_INGAME   = 3      # In-game frames (squads-HUD present) needed to decide a tier
+# Debug: save each classified streamer's badge crop + red/purple fractions to rank_samples/ (incl. the
+# OTHER bucket -> Diamond/Plat/Gold), so a collection run passively builds a labelled cross-rank set to
+# validate the purple/blue boundary. Turn off once the boundary is confirmed.
+RANK_GATE_SAMPLE_LOG     = True
 
 # ==================== GEMINI VALIDATION ====================
 GEMINI_VALIDATE           = False  # DISABLED 2026-07-09: Gemini free tier is dead (429s); leaving
