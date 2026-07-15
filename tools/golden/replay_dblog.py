@@ -208,6 +208,7 @@ def main():
     # ============================================================================================
     from pathlib import Path
     from match_detector import detect_matches_from_db, get_player_survival
+    from elo_engine import dedup_kill_rows   # the production stat-dedup fix, validated below
 
     # match_detector's EXACT ELO-feeding filter (Kill + both-name BleedOut). These are the rows that
     # become total_kills. ChampionEliminated is attacker-less -> excluded (no ELO credit), by design.
@@ -223,38 +224,43 @@ def main():
     atkless = [d for d in db_deaths if not d["atks"]]
 
     matches = detect_matches_from_db(Path(tmp))
-    elim_players, credited_kills = set(), {}
+    elim_players, credited_raw, credited_fix = set(), {}, {}
     for m in matches:
         eo, _ = get_player_survival(m)
         elim_players |= set(eo.keys())
-        for k in m.kills:                              # this is exactly what drives total_kills += 1
+        for k in m.kills:                              # OLD total_kills path: counts raw rows
             if k.attacker:
-                credited_kills[k.attacker] = credited_kills.get(k.attacker, 0) + 1
-    total_credited = sum(credited_kills.values())
+                credited_raw[k.attacker] = credited_raw.get(k.attacker, 0) + 1
+        for k in dedup_kill_rows(m.kills):             # NEW total_kills path: respawn-aware de-dup
+            if k.attacker:
+                credited_fix[k.attacker] = credited_fix.get(k.attacker, 0) + 1
+    total_raw, total_fix = sum(credited_raw.values()), sum(credited_fix.values())
+    credited_kills = credited_fix                       # for the top-attacker display below
     golden_creditable = sum(1 for g in golden if g["atk"])   # golden deaths that HAVE a known killer
 
     print("\n" + "=" * 78)
     print("BOUNDARY #1  --  do db_log survivors convert to ELO CREDIT?  (survival != rating)")
     print("=" * 78)
     print(f"ELO-feeding rows kept (Kill + both-name BleedOut) : {R}")
-    print(f"  -> distinct real deaths they represent          : {D}   (respawn-aware collapse)")
-    print(f"  -> total_kills OVER-COUNT factor                : {R/D:.2f}x   "
-          f"(rows counted raw by match_detector; the displayed kill STAT is inflated this much)")
+    print(f"  -> distinct real deaths they represent          : {D}   (respawn-aware victim collapse)")
     print(f"deaths captured but attacker-less (NO killer credited): {len(atkless)}   "
           f"(victim death recorded, but no player gets the ELO kill)")
+    print(f"\ntotal_kills STAT (elo_engine): OLD raw-row count vs NEW dedup_kill_rows() production fix")
+    print(f"  OLD (raw rows)         : {total_raw}   (over-count {total_raw/D:.2f}x vs {D} distinct deaths)")
+    print(f"  NEW (dedup_kill_rows)  : {total_fix}   (over-count {total_fix/D:.2f}x)  <- removes db_log's cap-2 dup rows")
+    print(f"  residual above 1.0x is OCR NAME-JITTER (one death read with 2 attacker spellings, e.g.")
+    print(f"  calamorii/calamoriii) -- a separate canonicalization problem (beads 1gn/op1), NOT db_log.")
     # The pairwise ELO rating is driven by elimination_order, which is PLAYER-keyed -- so db_log's
     # duplicate cap-2 rows cluster at the same victim/time and do NOT reorder distinct players (they
     # can't inflate the rating). That is the boundary-#1 answer. The count below is COVERAGE (a player
     # was eliminated SOMEWHERE), NOT proof the relative survival ORDER is correct -- see the caveat.
     print(f"\nRATING (pairwise, elimination_order is PLAYER-keyed -> cap-2 duplicates do NOT inflate it):")
     print(f"  players eliminated (coverage, not ordering): {len(elim_players)} vs golden deaths {len(golden)}")
-    print(f"  ELO KillEvents credited (raw): {total_credited}  across {len(credited_kills)} attackers"
-          f"   vs golden creditable deaths: {golden_creditable}")
     print(f"  CAVEAT: match_detector split this ONE game into {len(matches)} chunks (recursive stitch"
           f" splitter; only ~2 real >90s kill-gaps exist) -> pairwise comparisons are confined WITHIN"
           f" chunks, a SEPARATE rating distortion, orthogonal to db_log dedup and UNMEASURED here.")
     top = sorted(credited_kills.items(), key=lambda x: -x[1])[:6]
-    print("  top credited attackers (raw kill count -- watch for cap-2 doubling):")
+    print("  top credited attackers (NEW deduped kill count):")
     for a, c in top:
         print(f"     {a[:28]:<28} {c}")
 

@@ -15,6 +15,9 @@ edge_profile/
 
 # Databases & Logs
 elo.db*
+killfeed.db
+killfeed.db-shm
+killfeed.db-wal
 killfeed_log.csv
 calibration_cache.json
 

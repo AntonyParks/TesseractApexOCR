@@ -30,6 +30,36 @@ def k_factor(matches_played: int) -> float:
     return K_HIGH if matches_played < K_THRESHOLD else K_LOW
 
 
+KILL_DEDUP_WINDOW_SECONDS = 120   # same respawn window the golden harness uses
+
+_KD_NORM = re.compile(r"[^a-z0-9]")
+
+def dedup_kill_rows(kills: list) -> list:
+    """Collapse duplicate READS of one death for stat counting: the same (attacker, victim) within
+    KILL_DEDUP_WINDOW_SECONDS is ONE kill, not two.
+
+    Why: db_log's sticky-chain keeps up to STICKY_ELO_CHAIN_MAX_ROWS (=2) near-identical rows per
+    finish, and match_detector counts rows with no victim-dedup, so total_kills/total_deaths were
+    over-counted ~1.5x (measured on the golden game via tools/golden/replay_dblog.py). A GENUINE
+    respawn re-death -- same victim re-killed beyond the window, or by a different attacker -- is not
+    a duplicate and is preserved, so real re-kills still count. Order-preserving; only the stat
+    accumulation uses this. The pairwise ELO rating path is untouched (it reads match.kills directly
+    and is already respawn-safe: elimination_order is player-keyed)."""
+    def nk(s):
+        return _KD_NORM.sub("", (s or "").lower())
+    last: dict = {}   # (attacker_norm, victim_norm) -> last kept timestamp
+    out = []
+    for k in sorted(kills, key=lambda x: x.timestamp):
+        key = (nk(k.attacker), nk(k.victim))
+        prev = last.get(key)
+        if prev is not None and (k.timestamp - prev).total_seconds() <= KILL_DEDUP_WINDOW_SECONDS:
+            last[key] = k.timestamp     # extend the window; still the same death, drop it
+            continue
+        last[key] = k.timestamp
+        out.append(k)
+    return out
+
+
 def expected_score(rating_a: float, rating_b: float) -> float:
     """Probability that A beats B."""
     return 1.0 / (1.0 + 10.0 ** ((rating_b - rating_a) / 400.0))
@@ -87,8 +117,9 @@ def process_match(match: Match, ratings_cache: dict, db_path: Path = ELO_DB_PATH
     ]
     upsert_match_kills(kill_rows, path=db_path)
 
-    # --- Update kill/death stats ---
-    for k in match.kills:
+    # --- Update kill/death stats (respawn-aware de-dup: one death per (attacker, victim) window,
+    # so db_log's cap-2 duplicate rows don't inflate the counts; real re-kills still count) ---
+    for k in dedup_kill_rows(match.kills):
         if k.attacker and not _is_legend_name(k.attacker):
             r = _get_or_default(k.attacker, ratings_cache, db_path)
             r["total_kills"] += 1
