@@ -17,6 +17,7 @@ gap and the 1800s seed-lookback see the real in-game deltas.
 Run from repo root with PYTHONPATH=<repo> so it can import db_log/parsers/database.
 """
 import json, os, tempfile, types
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 
 import db_log
@@ -30,6 +31,11 @@ ELIM_TYPES = {"Kill", "BleedOut", "ChampionEliminated"}
 EPOCH0 = 1_700_000_000          # arbitrary fixed base; video-time t maps to EPOCH0 + t
 STREAMER = "replay"
 VIC_SIM = 0.82                  # same victim-collapse threshold parse_game.py uses
+BASE_DT = datetime(2024, 1, 1)  # video-time t (s) -> BASE_DT + t, so match_detector can _parse_ts it
+TS_FMT = "%Y-%m-%d %H:%M:%S"
+
+def t_to_ts(t):    return (BASE_DT + timedelta(seconds=float(t))).strftime(TS_FMT)
+def ts_to_t(ts):   return (datetime.strptime(ts, TS_FMT) - BASE_DT).total_seconds()
 
 
 def fz(a, b):
@@ -120,7 +126,7 @@ def main():
         parsed_elims.append({"t": r["t"], "vic": vic, "atk": atk, "et": et})
         fed += 1
         clock["now"] = float(EPOCH0 + r["t"])
-        rid = db_log.insert_event(STREAMER, str(r["t"]), r["text"], p.get("canonical", r["text"]),
+        rid = db_log.insert_event(STREAMER, t_to_ts(r["t"]), r["text"], p.get("canonical", r["text"]),
                                   et, atk, vic, 1.0, 1.0, db_path=tmp)
         if rid and rid > last_max_id:                               # a NEW row was inserted (not suppressed)
             conn.execute("UPDATE events SET created_at=? WHERE id=?", (int(EPOCH0 + r["t"]), rid))
@@ -129,7 +135,7 @@ def main():
             kept += 1
 
     # --- pull the SURVIVING elim rows db_log kept, collapse them respawn-aware -----------------------
-    surv = [{"t": float(row["timestamp"]), "vic": row["victim"], "atk": row["attacker"]}
+    surv = [{"t": ts_to_t(row["timestamp"]), "vic": row["victim"], "atk": row["attacker"]}
             for row in conn.execute(
                 "SELECT timestamp, attacker, victim FROM events WHERE event_type IN (?,?,?)",
                 tuple(ELIM_TYPES)).fetchall()]
@@ -192,6 +198,59 @@ def main():
     print(f"\n--- db_log SPURIOUS distinct deaths (survived dedup, no golden match): {len(spur_db)} ---")
     for o in sorted(spur_db, key=lambda x: x["t0"]):
         print(f"     t={int(o['t0']):4d}  {o['vic_disp'][:28]:<28} reads={o['n']}")
+
+    # ============================================================================================
+    # BOUNDARY #1: does a surviving row actually convert to ELO CREDIT?  (survival != rating)
+    # The ELO path (match_detector -> elo_engine) does NOT respawn-collapse: it counts ROWS. But
+    # total_kills/total_deaths are raw ROW counters, whereas the ELO RATING is placement-based
+    # (pairwise survival order via elimination_order, which is PLAYER-KEYED). So duplicate rows can
+    # inflate the displayed kill STAT while leaving the rating largely intact. Measure all three.
+    # ============================================================================================
+    from pathlib import Path
+    from match_detector import detect_matches_from_db, get_player_survival
+
+    # match_detector's EXACT ELO-feeding filter (Kill + both-name BleedOut). These are the rows that
+    # become total_kills. ChampionEliminated is attacker-less -> excluded (no ELO credit), by design.
+    elo_rows = conn.execute(
+        "SELECT timestamp, attacker, victim FROM events "
+        "WHERE (event_type='Kill' OR (event_type='BleedOut' AND attacker!='' AND victim!=''))"
+    ).fetchall()
+    elo_surv = [{"t": ts_to_t(r["timestamp"]), "vic": r["victim"], "atk": r["attacker"]} for r in elo_rows]
+    elo_distinct = collapse(elo_surv)                 # respawn-aware -> distinct real deaths credited
+    R, D = len(elo_rows), len(elo_distinct)
+
+    # deaths represented ONLY by attacker-less elim rows (a death is captured, but NO killer gets ELO)
+    atkless = [d for d in db_deaths if not d["atks"]]
+
+    matches = detect_matches_from_db(Path(tmp))
+    elim_players, credited_kills = set(), {}
+    for m in matches:
+        eo, _ = get_player_survival(m)
+        elim_players |= set(eo.keys())
+        for k in m.kills:                              # this is exactly what drives total_kills += 1
+            if k.attacker:
+                credited_kills[k.attacker] = credited_kills.get(k.attacker, 0) + 1
+    total_credited = sum(credited_kills.values())
+    golden_creditable = sum(1 for g in golden if g["atk"])   # golden deaths that HAVE a known killer
+
+    print("\n" + "=" * 78)
+    print("BOUNDARY #1  --  do db_log survivors convert to ELO CREDIT?  (survival != rating)")
+    print("=" * 78)
+    print(f"ELO-feeding rows kept (Kill + both-name BleedOut) : {R}")
+    print(f"  -> distinct real deaths they represent          : {D}   (respawn-aware collapse)")
+    print(f"  -> total_kills OVER-COUNT factor                : {R/D:.2f}x   "
+          f"(rows counted raw by match_detector; the displayed kill STAT is inflated this much)")
+    print(f"deaths captured but attacker-less (NO killer credited): {len(atkless)}   "
+          f"(victim death recorded, but no player gets the ELO kill)")
+    print(f"\nPLACEMENT (what the RATING actually uses -- player-keyed, so duplicate rows do NOT inflate):")
+    print(f"  matches detected: {len(matches)}   distinct players eliminated: {len(elim_players)}"
+          f"   vs golden distinct deaths: {len(golden)}")
+    print(f"  ELO KillEvents credited (raw): {total_credited}  across {len(credited_kills)} attackers"
+          f"   vs golden creditable deaths: {golden_creditable}")
+    top = sorted(credited_kills.items(), key=lambda x: -x[1])[:6]
+    print("  top credited attackers (raw kill count -- watch for cap-2 doubling):")
+    for a, c in top:
+        print(f"     {a[:28]:<28} {c}")
 
     db_log.time = __import__("time")   # restore
     print(f"\n(temp DB: {tmp}  -- throwaway; elo.db / killfeed.db untouched)")
