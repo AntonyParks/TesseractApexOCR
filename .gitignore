@@ -69,7 +69,11 @@ scratch/*.jpg
 # Extracted Apex UI fonts (TypeType commercial IP; for local synthetic training only)
 fonts/apex/
 
-# Golden-game harness: bulky, regenerable crop images (the JSONL ground truth IS tracked)
-tools/golden/data/vod_capture/crops/
-tools/golden/data/kf_crops/
-tools/golden/data/**/reads.jsonl.orig
+# Golden-game harness: bulky, regenerable crop images (the JSONL ground truth IS tracked).
+# Globbed over data* so every captured game (data/, data_game2/, ...) is covered.
+tools/golden/data*/**/crops/
+tools/golden/data*/kf_crops/
+tools/golden/data*/**/frames/
+tools/golden/data*/vod_arc/
+tools/golden/data*/vod_peek/
+tools/golden/data*/**/reads.jsonl.orig

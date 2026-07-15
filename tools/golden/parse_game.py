@@ -16,7 +16,7 @@ import config
 from database import PlayerDatabase
 from parsers import parse_killfeed_line
 
-SP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+SP = os.environ.get("GOLDEN_DATA") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 OUT = os.path.join(SP, "vod_capture")
 ELIM_TYPES = {"Kill", "BleedOut", "ChampionEliminated"}  # ChampionEliminated = death banner (victim-only)
 

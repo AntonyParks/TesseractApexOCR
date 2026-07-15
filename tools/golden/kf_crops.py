@@ -16,7 +16,7 @@ DT = 1.0  # one crop per video-second
 # (Sang OCR zone was x0=0.58 y0=0.16 y1=0.32). Extra margin catches clipped/edge lines.
 X0F, X1F, Y0F, Y1F = 0.60, 1.00, 0.075, 0.35
 
-SP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+SP = os.environ.get("GOLDEN_DATA") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 OUT = os.path.join(SP, "kf_crops"); os.makedirs(OUT, exist_ok=True)
 
 def open_vod(url, offset, duration):

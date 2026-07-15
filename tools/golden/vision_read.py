@@ -15,7 +15,7 @@ import config  # loads .env -> ANTHROPIC_API_KEY
 import anthropic
 
 MODEL = "claude-opus-4-8"
-SP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+SP = os.environ.get("GOLDEN_DATA") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 CROPS = os.path.join(SP, "kf_crops")
 OUTF = os.path.join(SP, "vision_reads.jsonl")
 

@@ -7,7 +7,7 @@ the crop-verified corrections drift, they drift in one place, not two.
 import json, os, re
 from difflib import SequenceMatcher
 
-DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+DATA = os.environ.get("GOLDEN_DATA") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 GAP = 120   # respawn re-cluster window: a victim dying again after > GAP is a NEW death, not a re-read
 
 
@@ -69,11 +69,17 @@ def build_golden(data_dir=DATA):
     golden = []
     for r in sorted(elim, key=lambda x: x["t"]):
         hit = None
+        rv_raw = (r["victim"] or "").strip().lower()      # for CJK/symbol names that norm() empties
         for d in golden:
-            if vmatch(r["victim"], d["vic"]) and r["t"] - d["t1"] <= GAP:
+            # vmatch handles Latin/alphanumeric names; but a victim made only of CJK/Cyrillic/symbols
+            # normalizes to EMPTY, so vmatch would never merge its consecutive reads -> one kill would
+            # be counted many times (denominator inflation). Fall back to raw-string equality for those.
+            same = vmatch(r["victim"], d["vic"]) or (not norm(r["victim"]) and rv_raw == d.get("vic_raw"))
+            if same and r["t"] - d["t1"] <= GAP:
                 hit = d; break
         if hit is None:
-            golden.append({"vic": r["victim"], "atk": set(filter(None, [r.get("attacker")])),
+            golden.append({"vic": r["victim"], "vic_raw": rv_raw,
+                           "atk": set(filter(None, [r.get("attacker")])),
                            "t0": r["t"], "t1": r["t"]})
         else:
             hit["t1"] = r["t"]

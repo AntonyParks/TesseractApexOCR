@@ -23,7 +23,7 @@ SAMPLE_DT = 0.5      # killfeed OCR cadence (video-sec)
 SQUADS_DT = 8.0      # squads read cadence (video-sec)
 FRAME_DT  = 10.0     # downscaled full-frame save cadence (video-sec)
 
-SP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+SP = os.environ.get("GOLDEN_DATA") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 OUT = os.path.join(SP, "vod_capture")
 CROPS = os.path.join(OUT, "crops"); FRAMES = os.path.join(OUT, "frames")
 os.makedirs(CROPS, exist_ok=True); os.makedirs(FRAMES, exist_ok=True)
