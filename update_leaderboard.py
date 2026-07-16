@@ -27,6 +27,11 @@ URL = "https://apexlegendsstatus.com/live-ranked-leaderboards/Battle_Royale/PC"
 CSV_PATH = Path("apex_ranked_leaderboard.csv")
 MIN_ROWS_SANE = 200   # refuse to overwrite the CSV with a suspiciously short scrape
 
+# Persistent Edge profile so a manually-solved Cloudflare Turnstile challenge's
+# cf_clearance cookie survives across runs -- without this every run looks like a
+# brand-new browser and Cloudflare re-challenges every time (verified 2026-07-10).
+EDGE_PROFILE_DIR = Path("edge_profile").resolve()
+
 try:
     from config import LEADERBOARD_MAX_AGE_HOURS as MAX_AGE_HOURS
 except Exception:
@@ -60,8 +65,11 @@ def scrape() -> list[tuple[int, str, int]]:
     from selenium.webdriver.edge.options import Options
     from selenium.webdriver.support.ui import WebDriverWait
 
+    EDGE_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+
     opts = Options()
     opts.add_argument("--window-size=1400,900")
+    opts.add_argument(f"--user-data-dir={EDGE_PROFILE_DIR}")
     # Cloudflare fingerprints obvious automation markers; these keep Edge looking normal.
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])

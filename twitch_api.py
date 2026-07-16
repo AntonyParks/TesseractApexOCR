@@ -6,6 +6,11 @@ import requests
 
 from config import STREAM_BLOCKLIST
 
+try:
+    from config import STREAM_LANGUAGE
+except ImportError:
+    STREAM_LANGUAGE = None
+
 _TOKEN_URL   = "https://id.twitch.tv/oauth2/token"
 _STREAMS_URL = "https://api.twitch.tv/helix/streams"
 _GAMES_URL   = "https://api.twitch.tv/helix/games"
@@ -114,6 +119,8 @@ def get_top_apex_streams(n: int = 20, ranked_only: bool = False) -> list[str]:
             "game_id": game_id,
             "first":   min(fetch_size - len(usernames), 100),
         }
+        if STREAM_LANGUAGE:
+            params["language"] = STREAM_LANGUAGE
         if cursor:
             params["after"] = cursor
 

@@ -63,6 +63,7 @@ logs/
 scratch/*.png
 scratch/*.npy
 scratch/*.jpg
+read_trace.jsonl
 
 # Frontend build cache
 *.tsbuildinfo

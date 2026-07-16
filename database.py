@@ -1,6 +1,7 @@
 """Database management for player names and legend typos with temporal clustering."""
 
 import json
+import re
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -171,6 +172,80 @@ class PlayerDatabase:
         """Return similarity ratio between two strings (0.0 to 1.0)."""
         return SequenceMatcher(None, s1.lower(), s2.lower()).ratio()
 
+    # ---- Confusion-aware canonicalization (bead 1gn; advisor-vetted split freeform/anon) ----
+    # Font-confusion classes are HAND-SPECIFIED (not mined from jitter pairs, which contain distinct
+    # anon players = the vmu failure). Freeform names fold letter/shape confusions; anonymized
+    # Legend#### names get STRUCTURED handling so digit distinctions that separate players are kept.
+    _FREEFORM_FOLD = str.maketrans({
+        'e': 'a',                          # a<->e (top confusion)
+        '0': 'o', 'c': 'o', 'd': 'o',      # rounded: o<->0<->c<->d
+        '1': 'i', 'l': 'i', 't': 'i',      # vertical stroke: i<->l<->1<->t
+        'v': 'u', 'y': 'u',                # u<->v<->y
+        '8': 'b', '6': 'b',                # curvy: b<->8<->6
+        '9': 'g', 'q': 'g',                # g<->9<->q
+        '5': 's',                          # s<->5
+    })
+    _DIGIT_RECOVER = str.maketrans('ilostbgqz', '110518992')  # letters OCR'd from digits -> digits
+
+    @classmethod
+    def _freeform_key(cls, name: str) -> str:
+        """Confusion-folded key for a freeform name: alnum-only, doubled-char-collapsed, class-folded."""
+        s = ''.join(ch for ch in name.lower() if ch.isalnum())
+        s = re.sub(r'(.)\1+', r'\1', s)          # collapse doubled letters (ll->l, ee->e) for indel jitter
+        return s.translate(cls._FREEFORM_FOLD)
+
+    @classmethod
+    def _anon_key(cls, name: str):
+        """Structured identity key for an anonymized Legend#### player, else None.
+        Returns (corrected_legend, digit_block). The 4-digit block is digit-shape-recovered (i->1,
+        o->0, s->5, b->8, g->9) but NOT fuzzed -- two clean-but-different numbers stay distinct, so
+        this never merges distinct players (vmu-safe by construction)."""
+        n = name.strip().lower()
+        m = re.match(r'^([a-z .\-_]{3,}?)[ .\-_]*([a-z0-9]{3,4})$', n)
+        if not m:
+            return None
+        prefix = m.group(1).replace(' ', '')
+        dig = m.group(2).translate(cls._DIGIT_RECOVER)
+        if not re.fullmatch(r'\d{3,4}', dig):
+            return None
+        best, best_r = None, 0.0
+        for legend in APEX_LEGENDS_CANONICAL:
+            r = SequenceMatcher(None, prefix, legend.lower().replace(' ', '')).ratio()
+            if r > best_r:
+                best, best_r = legend.lower().replace(' ', ''), r
+        if best_r < 0.6:
+            return None
+        return (best, dig)
+
+    @classmethod
+    def _confusion_same_identity(cls, a: str, b: str) -> bool:
+        """True if a and b are the same identity under confusion-aware canonicalization."""
+        ka, kb = cls._anon_key(a), cls._anon_key(b)
+        if ka is not None and kb is not None:
+            return ka == kb                       # both anon: structured key must match exactly
+        if ka is not None or kb is not None:
+            return False                          # one anon, one not: never the same
+        return cls._freeform_key(a) == cls._freeform_key(b) and len(cls._freeform_key(a)) >= 4
+
+    @staticmethod
+    def _anon_digit_conflict(a: str, b: str) -> bool:
+        """True if a and b are DISTINCT anonymized players that must not be merged.
+
+        Anonymized Apex players render as 'Legend####' (e.g. maggie8793, wraith5812). Two such
+        names sharing the legend prefix score a high fuzzy ratio (maggie5636 vs maggie8793 = 0.70)
+        and were being wrongly merged by the relaxed temporal matcher -- collapsing two real,
+        different players into one identity and inflating that player's ELO (measured 2026-07-11).
+        Guard: when BOTH names end in a >=3-digit run, the digit suffixes must themselves be
+        OCR-compatible (ratio >= 0.6). This blocks 8793 vs 5636 (ratio 0.0 -> conflict) while still
+        allowing genuine OCR variants of the SAME player -- 8793 vs 8783 (0.75), or wraith5.812 vs
+        wraith5812 (suffix 812 vs 5812 = 0.86).
+        """
+        ma = re.search(r'(\d{3,})$', a or '')
+        mb = re.search(r'(\d{3,})$', b or '')
+        if not (ma and mb):
+            return False
+        return SequenceMatcher(None, ma.group(1), mb.group(1)).ratio() < 0.6
+
     def find_recent_match(self, name: str, now: float) -> Optional[Tuple[str, float]]:
         """Check if this name matches any recently seen names with relaxed threshold.
 
@@ -186,7 +261,8 @@ class PlayerDatabase:
             if max(len1, len2) <= 1.86 * min(len1, len2):
                 # Check against canonical name
                 ratio = self.fuzzy_match_ratio(name, canonical_name)
-                if ratio > best_ratio and ratio >= self.temporal_threshold:
+                if (ratio > best_ratio and ratio >= self.temporal_threshold
+                        and not self._anon_digit_conflict(name, canonical_name)):
                     best_match = canonical_name
                     best_ratio = ratio
 
@@ -200,7 +276,8 @@ class PlayerDatabase:
                     continue
 
                 ratio = self.fuzzy_match_ratio(name, variant)
-                if ratio > best_ratio and ratio >= self.temporal_threshold:
+                if (ratio > best_ratio and ratio >= self.temporal_threshold
+                        and not self._anon_digit_conflict(name, variant)):
                     best_match = canonical_name
                     best_ratio = ratio
 
@@ -374,7 +451,20 @@ class PlayerDatabase:
             # Pick the higher similarity of the canonical name or any variant
             match_similarity = max(similarity, best_variant_similarity)
 
+            # Confusion-aware canonicalization (bead 1gn): if name and this canonical (or any of its
+            # variants) share a confusion key, treat as a strong match even when raw fuzzy fell below
+            # threshold -- this folds systematic OCR jitter (axle8b44/axlebb44, Wraith1052/Wraithios2)
+            # that plain SequenceMatcher misses. Anon names use the structured digit-exact key, so this
+            # cannot merge distinct players.
+            if (self._confusion_same_identity(name, canonical_name)
+                    or any(self._confusion_same_identity(name, v) for v in entry.get("variants", {}))):
+                match_similarity = max(match_similarity, 0.95)
+
             if match_similarity < FUZZY_MATCH_THRESHOLD:
+                continue
+
+            # Never merge two distinct anonymized players (Legend#### with different digits).
+            if self._anon_digit_conflict(name, canonical_name):
                 continue
 
             confidence = self.get_name_confidence_score(canonical_name)

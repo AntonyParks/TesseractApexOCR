@@ -163,6 +163,13 @@ def main():
     parser.add_argument("--force-csv",action="store_true", help="Force CSV source even if DB exists")
     args = parser.parse_args()
 
+    # NOTE (bead TesseractApexOCR-6uj): a clean rebuild drop_db()s then repopulates elo.db IN PLACE,
+    # so api.py briefly serves an empty/partial leaderboard during the rebuild. An atomic temp-DB +
+    # os.replace() swap was attempted but elo.db runs in WAL mode and a lingering connection keeps
+    # elo.db.rebuild-wal locked at swap time. The correct fix is to build in a child process that
+    # fully exits (guaranteeing all SQLite handles close) and os.replace() from the parent -- deferred.
+    # Reverted to the original in-place rebuild for now.
+
     # Choose data source: SQLite preferred, CSV fallback
     use_db = args.db_log.exists() and not args.force_csv
 
