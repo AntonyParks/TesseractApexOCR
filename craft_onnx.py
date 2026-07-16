@@ -16,6 +16,15 @@ leaves the stock torch CRAFT in place and OCR keeps working.
 import os
 import threading
 
+# Process-wide singleton (see install_dml_detector). MANDATORY, not an optimization: ORT-DirectML
+# segfaults on concurrent Run() across INDEPENDENT sessions, and ocr.py runs as module `__main__`
+# while `import ocr` (e.g. from calibrate_zone's local calibration) creates a SECOND `ocr` module
+# copy with its own reader -> its own detector. Sharing one detector here (craft_onnx is always
+# imported canonically, never as __main__) guarantees every reader copy points at the SAME session
+# + SAME lock, so all detection serializes safely. Two sessions = SIGSEGV (observed live 2026-07-15).
+_DML_DETECTOR = None
+_DML_DETECTOR_LOCK = threading.Lock()
+
 
 class DmlCraftDetector:
     """Callable drop-in for EasyOCR's `reader.detector` that runs CRAFT on DirectML via ONNX Runtime.
@@ -36,9 +45,10 @@ class DmlCraftDetector:
             onnx_path, providers=["DmlExecutionProvider", "CPUExecutionProvider"]
         )
         self._input_name = self.sess.get_inputs()[0].name  # "x"
-        # ORT Run() is documented thread-safe, but the DirectML EP has had concurrency caveats and up
-        # to TOP_STREAMS_COUNT worker threads share this one detector. Serialize on the single GPU
-        # (calls are 2-18ms; the device serializes anyway). Safe to remove if DML proves concurrent.
+        # MANDATORY lock -- do NOT remove. ORT-DirectML segfaults on concurrent Run(), so all worker
+        # threads sharing this detector must serialize here (calls are 2-18ms; the GPU serializes
+        # anyway). Removing it OR allowing a second session (see the _DML_DETECTOR singleton above)
+        # crashes the process -- both were observed as exit-139 SIGSEGV, not theoretical.
         self._lock = threading.Lock()
 
     def __call__(self, x):
@@ -107,14 +117,21 @@ def install_dml_detector(reader, onnx_path: str | None = None) -> bool:
         except Exception:
             onnx_path = os.path.join("models", "easyocr_custom", "craft.onnx")
 
-    if not os.path.exists(onnx_path):
-        print(f"[EasyOCR] Exporting CRAFT -> ONNX (first run): {onnx_path}")
-        try:
-            export_craft_onnx(reader, onnx_path)
-        except Exception as e:
-            print(f"[EasyOCR] CRAFT ONNX export failed ({type(e).__name__}: {e}); using torch CRAFT.")
-            return False
-
-    reader.detector = DmlCraftDetector(onnx_path)
+    # Build the DML detector exactly ONCE per process and share it across every reader. If ocr.py is
+    # both `__main__` and an imported `ocr` module, each copy builds its own reader; without this
+    # shared singleton each reader would get an INDEPENDENT ORT-DirectML session and concurrent Run()
+    # across them SIGSEGVs (observed live 2026-07-15). One session + one lock = safe serialization.
+    global _DML_DETECTOR
+    with _DML_DETECTOR_LOCK:
+        if _DML_DETECTOR is None:
+            if not os.path.exists(onnx_path):
+                print(f"[EasyOCR] Exporting CRAFT -> ONNX (first run): {onnx_path}")
+                try:
+                    export_craft_onnx(reader, onnx_path)
+                except Exception as e:
+                    print(f"[EasyOCR] CRAFT ONNX export failed ({type(e).__name__}: {e}); using torch CRAFT.")
+                    return False
+            _DML_DETECTOR = DmlCraftDetector(onnx_path)
+        reader.detector = _DML_DETECTOR
     print(f"[EasyOCR] DirectML CRAFT detector installed ({os.path.basename(onnx_path)}).")
     return True
