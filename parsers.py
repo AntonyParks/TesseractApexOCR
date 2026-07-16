@@ -265,9 +265,13 @@ def split_by_gun_icon(text: str, positional: bool = False) -> Tuple[str, Optiona
     if len(player_names) < 2:
         return text, None
 
-    # First player name = attacker
-    # Last player name = victim (may be compound name, so re-extract with allow_compound=True)
-    attacker_segment, attacker_name = player_names[0]
+    # First player name = attacker; last = victim -- EXCEPT when 3+ names survived, which means two
+    # killfeed rows merged into one crop ("A <icon> B <icon> C"). Pairing first+last then fabricates a
+    # cross-row event (A->C that never happened; measured across 10 games, bead q6e). Pair the BOTTOM
+    # row instead: the name just before the last icon (attacker) and the last name (victim) -- the
+    # freshest real event. The top row is dropped rather than mispaired.
+    atk_idx = -2 if len(player_names) >= 3 else 0
+    attacker_segment, attacker_name = player_names[atk_idx]
     victim_segment, _ = player_names[-1]
 
     # Re-extract victim with compound name support (carry the relaxed floor if we used it above so a
@@ -583,6 +587,15 @@ def clean_player_name(name: str) -> str:
     name = re.sub(r"[-_]+(suggested|spotted|reviving|pinged).*$", "", name, flags=re.IGNORECASE)
     name = name.rstrip("-_:@")
 
+    # Collapse an exact whole-string doubling ("pathfinder1574pathfinder1574" -> "pathfinder1574"),
+    # a detector artifact from an overlapping/duplicated killfeed line (bug audit 2026-07-16). Strict
+    # guard: only when the string is exactly two identical halves of >=5 chars each, so a genuinely
+    # repeated short name is never clobbered.
+    if len(name) >= 10 and len(name) % 2 == 0:
+        half = len(name) // 2
+        if half >= 5 and name[:half] == name[half:]:
+            name = name[:half]
+
     return name
 
 
@@ -654,7 +667,13 @@ def _parse_killfeed_line_raw(line: str, db, timestamp: Optional[float] = None) -
     # revived and the pair may legitimately recur (knock+finish, revive/respawn cycles).
     # With KNOCK_KILL_DISTINCTION off, everything stays 'Kill' (legacy behavior; required
     # for OCR paths that never emit <KILL_ICON>, e.g. TrOCR/Tesseract).
-    has_kill_marker = bool(re.search(r"<\s*kill[_\s]*icon\s*>|\bkillicon\b", low))
+    # Event type from the LAST icon marker. For a single-icon line this is byte-identical to "any
+    # kill icon present" (the only icon IS the last). For a two-row concat ("A <gun> B <kill> C") it
+    # types the BOTTOM row that split_by_gun_icon now pairs (bead q6e), so a stray kill-icon on the
+    # top row can't mislabel a bottom-row knock as a Kill (or vice-versa).
+    _icons = re.findall(r"<\s*(kill|gun)[_\s]*icon\s*>|\b(kill|gun)icon\b", low)
+    _last_icon = next((a or b for a, b in reversed(_icons)), None)
+    has_kill_marker = (_last_icon == "kill")
     gun_line_type = "Kill" if (has_kill_marker or not KNOCK_KILL_DISTINCTION) else "Knock"
 
     # Ignore HUD banners/prompts that can contain a gun icon glyph but are

@@ -343,6 +343,12 @@ def insert_event(
     STICKY_CHAIN_MAX_ROWS)."""
     from config import KILLFEED_DB_PATH
     db = db_path or KILLFEED_DB_PATH
+    # Drop unusable ELO rows: a Kill/BleedOut with NEITHER an attacker NOR a victim can never credit a
+    # rating and is pure crop-truncation noise (e.g. 'Bleed Out] pathfinder1426' with the attacker cut
+    # off the left edge, victim unparseable) -- ~0.4% of stored events (bug audit 2026-07-16). Reject
+    # before the DB touch so they never pollute the killfeed log or downstream counts.
+    if event_type in ("Kill", "BleedOut") and not (attacker or "").strip() and not (victim or "").strip():
+        return -1
     with _write_lock:
         conn = _get_write_conn(db)
         active_cluster = None   # set when this row belongs to a fuzzy sticky-line chain
