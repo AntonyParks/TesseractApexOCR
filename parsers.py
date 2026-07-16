@@ -47,6 +47,12 @@ _NOTIFICATION_WORDS = {
 }
 _LEGENDS_LOWER = {l.lower() for l in APEX_LEGENDS_CANONICAL}
 
+# Broadcast / UI tags that are NEVER a standalone player name. They leak as rated players when OCR
+# strips the bracket entirely ("[live" -> "live", "[ttok]" -> "ttok"); the bracket-anywhere clan-tag
+# guard catches them while a bracket survives, this backstops the fully-de-bracketed case. Kept to
+# the verified-never-a-name set (measured 2026-07-16: all occurrences are tags, no real players).
+_BROADCAST_TAGS = {"live", "lve", "ttv", "ttok", "twitch", "yt"}
+
 
 def _extract_positional_name(segment: str, relax_floor: bool = False):
     """Extract a player name from a segment KNOWN to flank a kill/gun/[Bleed Out] marker, so it
@@ -63,7 +69,7 @@ def _extract_positional_name(segment: str, relax_floor: bool = False):
     kept = []
     saw_clan = False                              # a clan tag flanks the name -> it's a real player
     for token in tokens:
-        had_brackets = token.startswith('[') or token.startswith('(')
+        had_brackets = bool(re.search(r'[\[\](){}]', token))  # leading OR trailing/garbled bracket
         clean = re.sub(r'[\[\]\(\)]', '', token).strip('.,;:!?-_=|')
         if not clean:
             continue
@@ -129,7 +135,7 @@ def extract_player_from_segment(segment: str, allow_compound: bool = False, posi
     _short_prefix = None  # 1-3 char fragment that may be start of a split name
     for token in tokens:
         # Clean brackets but remember they were there
-        had_brackets = token.startswith('[') or token.startswith('(')
+        had_brackets = bool(re.search(r'[\[\](){}]', token))  # leading OR trailing/garbled bracket
         clean_token = re.sub(r'[\[\]\(\)]', '', token)
 
         # Strip leading AND trailing dots, commas, special chars
@@ -487,6 +493,11 @@ def is_invalid_player_name(name: str, positional: bool = False) -> bool:
         return True
 
     name_low = name.lower().strip()
+
+    # Broadcast/UI tag leaking as a bare name (bracket lost to OCR): never a real player. Rejected
+    # here (before the positional relaxation) so it's dropped even in a structured kill line.
+    if name_low in _BROADCAST_TAGS:
+        return True
 
     # Filter out standalone legend names (case-insensitive)
     name_title = name.title()
@@ -1071,7 +1082,7 @@ def _debug_trace_segment(
     _short_prefix = None
 
     for token in tokens:
-        had_brackets = token.startswith('[') or token.startswith('(')
+        had_brackets = bool(re.search(r'[\[\](){}]', token))  # leading OR trailing/garbled bracket
         clean_token = re.sub(r'[\[\]\(\)]', '', token)
         clean_token = clean_token.strip('.,;:!?-_=|')
 
