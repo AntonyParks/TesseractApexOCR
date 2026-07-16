@@ -21,6 +21,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from config import LOG_PATH, KILLFEED_DB_PATH
+from database import PlayerDatabase           # confusion-aware identity check for dedupe (bead 1gn)
 from elo_db import ELO_DB_PATH, drop_db, get_all_player_ratings, init_db, merge_player
 from elo_engine import batch_reprocess
 from match_detector import GAP_SECONDS, MIN_KILLS, detect_matches, detect_matches_from_db, get_player_survival
@@ -65,6 +66,31 @@ def deduplicate_players(db_path: Path, dry_run: bool = False) -> list[tuple]:
             if is_similar:
                 adj[p1["player"]].add(p2["player"])
                 adj[p2["player"]].add(p1["player"])
+
+    # Confusion-aware edges (bead 1gn): the raw-ratio gate above misses OCR font-jitter that differs
+    # in the leading chars (iakme/lakme = 0.80 but different prefix -> below 0.82) and garbled-legend
+    # anon players (revgnantb070/pavenant8070 = same Revenant#8070 but low raw ratio). Group players
+    # by their confusion identity KEY once (O(n), not per-pair): PlayerDatabase._freeform_key folds
+    # hand-specified look-alike classes (l<->i, o<->d, 8<->b, s<->5, ...); _anon_key uses the
+    # legend-corrected prefix + an EXACT digit-recovered block, so distinct anon players (different
+    # ####) never share a key -- the vmu over-merge stays closed by construction.
+    _conf_groups: dict = {}
+    for p in players:
+        nm = p["player"]
+        if len(nm) < _DEDUPE_MIN_LEN:
+            continue
+        ak = PlayerDatabase._anon_key(nm)
+        if ak is not None:
+            key = ("anon", ak)
+        else:
+            fk = PlayerDatabase._freeform_key(nm)
+            key = ("free", fk) if len(fk) >= 4 else None
+        if key is not None:
+            _conf_groups.setdefault(key, []).append(nm)
+    for members in _conf_groups.values():
+        for other in members[1:]:
+            adj[members[0]].add(other)
+            adj[other].add(members[0])
 
     # Also handle "base + noise suffix" pattern: "baby" -> "baby svoo"
     single_names = {p["player"].lower(): p["player"] for p in players if " " not in p["player"]}
