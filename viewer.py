@@ -149,25 +149,37 @@ def _safe_path(streamer_dir: str, filename: str) -> Path:
 # ---------------------------------------------------------------------------
 # API routes
 # ---------------------------------------------------------------------------
+PROVISIONAL_MIN_MATCHES = 5   # below this a player is 'provisional' and hidden from the default board
+
 @app.get("/api/players")
 def api_players(q: str = "", limit: int = 200):
-    """ELO leaderboard, optionally filtered by player name substring."""
+    """ELO leaderboard, optionally filtered by player name substring.
+
+    Ranked by the conservative Glicko-2 estimate (mu - 2*rd). The default board hides provisional
+    players (< PROVISIONAL_MIN_MATCHES games) so a lucky small sample can't top it — but a name
+    search (q) still returns provisional players so they remain findable. elo (mu) is the displayed
+    headline; rd is exposed so the UI can badge provisional ratings."""
     try:
         conn = _edb()
     except HTTPException:
         return JSONResponse({"players": [], "error": "elo.db not found"})
 
     rows = conn.execute(
-        """SELECT player, elo, matches_played, total_kills, total_deaths
+        """SELECT player, elo, rd, matches_played, total_kills, total_deaths,
+                  (elo - 2.0 * rd) AS conservative
            FROM player_ratings
-           ORDER BY elo DESC"""
+           ORDER BY (elo - 2.0 * rd) DESC"""
     ).fetchall()
     conn.close()
 
     players = [dict(r) for r in rows]
+    for p in players:
+        p["provisional"] = p["matches_played"] < PROVISIONAL_MIN_MATCHES
     if q:
         ql = q.lower()
-        players = [p for p in players if ql in p["player"].lower()]
+        players = [p for p in players if ql in p["player"].lower()]   # search finds provisional too
+    else:
+        players = [p for p in players if not p["provisional"]]        # default board: proven only
     return {"players": players[:limit]}
 
 

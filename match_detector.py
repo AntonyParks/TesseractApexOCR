@@ -122,14 +122,25 @@ def _resolve_survival_order(kills: list[KillEvent]) -> dict[str, int]:
 
 
 def _compute_last_alive_order(kills: list[KillEvent]) -> dict[str, int]:
-    """For attacker-only players, the last kill they made is their minimum survival floor."""
-    last_alive: dict[str, int] = {}
+    """Survival floor for every player who appears in the match (as attacker OR victim).
+
+    Rule (rma decision #5): a player we never observe dying is assumed to have outlasted the WHOLE
+    observed field, so their floor is the match's LAST observed kill-order, not their own last
+    action. The caller drops anyone with a definitive elimination, leaving true survivors — each
+    then credited (positively) against ALL confirmed-dead, and never compared to other survivors,
+    so a streamer dying early can only help or leave a survivor flat, never punish them. Extending
+    "seen" to victim appearances (not just attacker kills) means revived/knocked players who never
+    finally die also get their survivor floor."""
+    if not kills:
+        return {}
+    match_end = max(k.kill_order for k in kills)
+    seen: set[str] = set()
     for kill in kills:
         if kill.attacker:
-            last_alive[kill.attacker] = max(
-                last_alive.get(kill.attacker, 0), kill.kill_order
-            )
-    return last_alive
+            seen.add(kill.attacker)
+        if kill.victim:
+            seen.add(kill.victim)
+    return {player: match_end for player in seen}
 def _split_chunk_recursive(kills_chunk: list[tuple[datetime, dict]], max_players: int = 62, max_duration: float = 1500.0) -> list[list[tuple[datetime, dict]]]:
     """Recursively split a grouped kills chunk if it exceeds unique player or duration bounds."""
     if len(kills_chunk) < 2:

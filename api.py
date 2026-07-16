@@ -239,11 +239,15 @@ def gemini_stats():
 
 @app.get("/rankings")
 def get_rankings(
-    min_matches: int = Query(1, ge=1),
+    min_matches: int = Query(5, ge=1),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ):
-    """Player leaderboard sorted by ELO descending."""
+    """Player leaderboard ranked by the conservative Glicko-2 estimate (mu - 2*rd), descending.
+
+    Defaults to min_matches=5 so the board shows only players with enough games to have earned a
+    rating; unproven players are 'provisional' (pass min_matches=1 to include them). Match-count is
+    the gate because rd does not converge under this dataset's sparse per-match coverage."""
     if not elo_db.ELO_DB_PATH.exists():
         raise HTTPException(status_code=503, detail="ELO database not found. Run reprocess.py first.")
     players = elo_db.get_rankings(limit=limit, offset=offset, min_matches=min_matches)

@@ -1,17 +1,21 @@
-"""Pairwise ELO calculation for Apex killfeed match sessions.
+"""Glicko-2 rating calculation for Apex killfeed match sessions.
 
-ELO model:
-    - Each match produces pairwise comparisons between players based on survival order.
-    - The player who survived longer (higher kill_order at elimination) wins the matchup.
-    - Implicit survival credit: an attacker who made kill at order K is treated as
-      outlasting any victim killed at order <= K (if attacker was never eliminated before K).
-    - K-factor: 32 for first 20 rated matches, 16 thereafter.
-    - Starting ELO: 1000.
+Rating model:
+    - Each match produces pairwise-survival comparisons: the player who survived longer (higher
+      kill_order at elimination) beats the other. A survivor (never observed dying) is credited
+      against ALL confirmed-dead and never compared to other survivors (rma decision #5).
+    - All of a match's comparisons for one player are pooled into a SINGLE Glicko-2 update, so
+      swing magnitude tracks opponent STRENGTH while opponent COUNT shrinks the deviation (rd) —
+      see glicko.py. This replaces the old sum-of-per-opponent K-factor ELO (which let a well-
+      observed match spike a rating; that was the small-sample inflation bug, 2026-07-16).
+    - Leaderboard ranks by the conservative estimate mu - 2*rd (elo_db.get_rankings).
+    - Starting rating 1000, rd 350, vol 0.06 (glicko defaults).
 """
 
 import re
 from pathlib import Path
 
+import glicko
 from config import APEX_LEGENDS_CANONICAL, COMMON_WORDS, PLAYER_NAME_MIN_LENGTH, PLAYER_NAME_MAX_DIGIT_RATIO
 from elo_db import (
     ELO_DB_PATH, get_player_rating, update_player_rating,
@@ -19,15 +23,8 @@ from elo_db import (
 )
 from match_detector import Match, get_player_survival, CONF_FLOOR
 
-STARTING_ELO = 1000.0
+STARTING_ELO = glicko.RATING0
 ELO_FLOOR = 100.0
-K_HIGH = 32.0   # first 20 matches
-K_LOW = 16.0    # after 20 matches
-K_THRESHOLD = 20
-
-
-def k_factor(matches_played: int) -> float:
-    return K_HIGH if matches_played < K_THRESHOLD else K_LOW
 
 
 KILL_DEDUP_WINDOW_SECONDS = 120   # same respawn window the golden harness uses
@@ -60,21 +57,21 @@ def dedup_kill_rows(kills: list) -> list:
     return out
 
 
-def expected_score(rating_a: float, rating_b: float) -> float:
-    """Probability that A beats B."""
-    return 1.0 / (1.0 + 10.0 ** ((rating_b - rating_a) / 400.0))
-
-
 def _get_or_default(player: str, ratings_cache: dict, db_path: Path) -> dict:
     if player not in ratings_cache:
         existing = get_player_rating(player, db_path)
+        if existing:
+            existing.setdefault("rd", glicko.RD0)
+            existing.setdefault("vol", glicko.VOL0)
         ratings_cache[player] = existing or {
             "player": player,
-            "elo": STARTING_ELO,
+            "elo": glicko.RATING0,
+            "rd": glicko.RD0,
+            "vol": glicko.VOL0,
             "matches_played": 0,
             "total_kills": 0,
             "total_deaths": 0,
-            "peak_elo": STARTING_ELO,
+            "peak_elo": glicko.RATING0,
         }
     return ratings_cache[player]
 
@@ -168,79 +165,60 @@ def process_match(match: Match, ratings_cache: dict, db_path: Path = ELO_DB_PATH
         eligible_victims = {p: o for p, o in eligible_victims.items() if p in top_players}
         attacker_only    = {p: o for p, o in attacker_only.items()    if p in top_players}
 
-    # Accumulate ELO deltas across all pairwise comparisons
-    # Use a temporary delta dict so all updates in this match happen simultaneously
-    elo_deltas: dict[str, float] = {}
+    # Collect each player's pairwise results for this match, then run ONE Glicko-2 update per
+    # player (below). Opponent ratings are read PRE-match (ratings_cache isn't mutated until the
+    # apply step), so every comparison in a match uses the same fixed opponent ratings — a proper
+    # Glicko rating period. A result is (opp_rating, opp_rd, score): score 1.0 = outlasted them.
+    results: dict[str, list] = {}
+
+    def _record(winner: str, loser: str) -> None:
+        rw = _get_or_default(winner, ratings_cache, db_path)
+        rl = _get_or_default(loser, ratings_cache, db_path)
+        results.setdefault(winner, []).append((rl["elo"], rl["rd"], 1.0))
+        results.setdefault(loser, []).append((rw["elo"], rw["rd"], 0.0))
 
     victims = list(eligible_victims.items())
 
-    # Case 1: victim vs victim — both have definitive elimination orders
+    # Case 1: victim vs victim — both have definitive elimination orders; higher order outlasted.
     for i in range(len(victims)):
         p_a, order_a = victims[i]
         for j in range(i + 1, len(victims)):
             p_b, order_b = victims[j]
             if p_a == p_b:
                 continue
-
-            r_a = _get_or_default(p_a, ratings_cache, db_path)
-            r_b = _get_or_default(p_b, ratings_cache, db_path)
-
-            elo_a = r_a["elo"]
-            elo_b = r_b["elo"]
-
-            # Higher order = survived longer = won
             if order_a < order_b:
-                # B outlasted A → B won
-                e_b = expected_score(elo_b, elo_a)
-                k_b = k_factor(r_b["matches_played"])
-                k_a = k_factor(r_a["matches_played"])
-                elo_deltas[p_b] = elo_deltas.get(p_b, 0.0) + k_b * (1.0 - e_b)
-                elo_deltas[p_a] = elo_deltas.get(p_a, 0.0) + k_a * (0.0 - (1.0 - e_b))
+                _record(p_b, p_a)       # B outlasted A
             elif order_b < order_a:
-                # A outlasted B → A won
-                e_a = expected_score(elo_a, elo_b)
-                k_a = k_factor(r_a["matches_played"])
-                k_b = k_factor(r_b["matches_played"])
-                elo_deltas[p_a] = elo_deltas.get(p_a, 0.0) + k_a * (1.0 - e_a)
-                elo_deltas[p_b] = elo_deltas.get(p_b, 0.0) + k_b * (0.0 - (1.0 - e_a))
+                _record(p_a, p_b)       # A outlasted B
             # Exact tie in kill_order is impossible (unique kill events)
 
-    # Case 2: victim vs attacker-only — implicit survival credit
+    # Case 2: survivor vs victim — a survivor (never observed dying) outlasted every confirmed-dead
+    # player (decision #5: their floor is the match end, so a_floor >= v_order always holds). The
+    # guard is kept for safety. Survivors are never compared to each other (their order is unknown),
+    # so a survivor only ever gains here and is never punished by the streamer dying early.
     for victim, v_order in eligible_victims.items():
-        r_v = _get_or_default(victim, ratings_cache, db_path)
         for attacker, a_floor in attacker_only.items():
-            if attacker == victim:
+            if attacker == victim or a_floor < v_order:
                 continue
-            if a_floor < v_order:
-                # Attacker's last known alive was before victim died → unknown, skip
-                continue
+            _record(attacker, victim)
 
-            # Attacker was alive at a_floor >= v_order → attacker outlasted victim
-            r_a = _get_or_default(attacker, ratings_cache, db_path)
-            elo_a = r_a["elo"]
-            elo_v = r_v["elo"]
-
-            e_a = expected_score(elo_a, elo_v)
-            k_a = k_factor(r_a["matches_played"])
-            k_v = k_factor(r_v["matches_played"])
-            elo_deltas[attacker] = elo_deltas.get(attacker, 0.0) + k_a * (1.0 - e_a)
-            elo_deltas[victim] = elo_deltas.get(victim, 0.0) + k_v * (0.0 - (1.0 - e_a))
-
-    # --- Apply deltas and write placements ---
-    affected_players = set(elo_deltas) | set(eligible_victims) | set(attacker_only)
+    # --- Apply one Glicko-2 update per player and write placements ---
+    affected_players = set(results) | set(eligible_victims) | set(attacker_only)
 
     for player in affected_players:
         r = _get_or_default(player, ratings_cache, db_path)
         elo_before = r["elo"]
-        delta = elo_deltas.get(player, 0.0)
-        elo_after = max(ELO_FLOOR, elo_before + delta)
+        new = glicko.update(r["elo"], r["rd"], r["vol"], results.get(player, []))
+        elo_after = max(ELO_FLOOR, new["rating"])
         r["elo"] = elo_after
+        r["rd"] = new["rd"]
+        r["vol"] = new["vol"]
+        r["peak_elo"] = max(r.get("peak_elo", elo_after), elo_after)
         r["matches_played"] = r["matches_played"] + 1
 
-        # Placement row for everyone with a known survival position. Eliminated players
-        # store their elimination kill_order; survivors (attacker-only, never definitively
-        # eliminated on stream) store their survival FLOOR with survived=1 so the API can
-        # distinguish "died as kill N" from "still alive at least until kill N".
+        # Placement row for everyone with a known survival position. Eliminated players store their
+        # elimination kill_order; survivors store their survival FLOOR (match end) with survived=1
+        # so the API can distinguish "died as kill N" from "still alive through the observed match".
         kill_order_out = elimination_order.get(player) or attacker_only.get(player, 0)
         if kill_order_out:
             upsert_placement(
@@ -284,6 +262,18 @@ def _is_anonymized_player(name: str) -> bool:
             remainder = name_low[len(l_pat):].strip()
             if remainder and remainder.isdigit():
                 return True
+
+    # OCR-robust catch: an anonymized 'Legend####' player whose legend prefix is GARBLED
+    # (miraqe6442, oct ane1728, ballstic4142, catalvst4032) or whose digits were mis-read as
+    # letters. PlayerDatabase._anon_key fuzzy-matches the prefix to a canonical legend (>=0.6)
+    # and digit-recovers the 3-4 char suffix; a non-None result means this is an anonymized
+    # label. Such labels are NON-IDENTIFYING -- Apex's hide-names setting can hand the SAME
+    # Legend#### to different real players, so they must never be rated / appear on the
+    # leaderboard. The exact-legend checks above still handle bare/bracketed legends with no
+    # digits (e.g. [valk], octane), which _anon_key does not catch. (bead: anon-not-identifying)
+    from database import PlayerDatabase
+    if PlayerDatabase._anon_key(name) is not None:
+        return True
 
     return False
 
@@ -363,6 +353,8 @@ def batch_reprocess(matches: list[Match], db_path: Path = ELO_DB_PATH) -> dict:
             matches_played=r["matches_played"],
             total_kills=r["total_kills"],
             total_deaths=r["total_deaths"],
+            rd=r.get("rd", glicko.RD0),
+            vol=r.get("vol", glicko.VOL0),
             path=db_path,
         )
 

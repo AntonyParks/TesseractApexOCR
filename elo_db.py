@@ -51,7 +51,9 @@ CREATE TABLE IF NOT EXISTS match_placements (
 
 CREATE TABLE IF NOT EXISTS player_ratings (
     player         TEXT PRIMARY KEY,
-    elo            REAL NOT NULL DEFAULT 1000.0,
+    elo            REAL NOT NULL DEFAULT 1000.0,   -- Glicko-2 rating (mu)
+    rd             REAL NOT NULL DEFAULT 350.0,    -- Glicko-2 deviation (uncertainty); leaderboard ranks by elo - 2*rd
+    vol            REAL NOT NULL DEFAULT 0.06,     -- Glicko-2 volatility (sigma)
     matches_played INTEGER NOT NULL DEFAULT 0,
     total_kills    INTEGER NOT NULL DEFAULT 0,
     total_deaths   INTEGER NOT NULL DEFAULT 0,
@@ -144,6 +146,7 @@ def upsert_placement(match_id: str, player: str, kill_order_out: int,
 
 def update_player_rating(player: str, elo: float, matches_played: int,
                          total_kills: int, total_deaths: int,
+                         rd: float = 350.0, vol: float = 0.06,
                          path: Path = ELO_DB_PATH) -> None:
     now = datetime.now(timezone.utc).isoformat()
     with get_conn(path) as conn:
@@ -153,16 +156,18 @@ def update_player_rating(player: str, elo: float, matches_played: int,
         peak_elo = max(elo, existing["peak_elo"] if existing else elo)
         conn.execute("""
             INSERT INTO player_ratings
-                (player, elo, matches_played, total_kills, total_deaths, peak_elo, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (player, elo, rd, vol, matches_played, total_kills, total_deaths, peak_elo, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(player) DO UPDATE SET
                 elo            = excluded.elo,
+                rd             = excluded.rd,
+                vol            = excluded.vol,
                 matches_played = excluded.matches_played,
                 total_kills    = excluded.total_kills,
                 total_deaths   = excluded.total_deaths,
                 peak_elo       = excluded.peak_elo,
                 last_updated   = excluded.last_updated
-        """, (player, elo, matches_played, total_kills, total_deaths, peak_elo, now))
+        """, (player, elo, rd, vol, matches_played, total_kills, total_deaths, peak_elo, now))
 
 
 # ---------------------------------------------------------------------------
@@ -180,10 +185,13 @@ def get_player_rating(player: str, path: Path = ELO_DB_PATH) -> Optional[dict]:
 def get_rankings(limit: int = 100, offset: int = 0, min_matches: int = 1,
                  path: Path = ELO_DB_PATH) -> list[dict]:
     with get_conn(path) as conn:
+        # Rank by the CONSERVATIVE estimate (Glicko-2 mu - 2*rd), not raw mu: unproven players
+        # (large rd) sit lower until they've earned certainty, so a lucky small sample can't top
+        # the board. elo (mu) stays the displayed headline number.
         rows = conn.execute("""
             SELECT * FROM player_ratings
             WHERE matches_played >= ?
-            ORDER BY elo DESC
+            ORDER BY (elo - 2.0 * rd) DESC
             LIMIT ? OFFSET ?
         """, (min_matches, limit, offset)).fetchall()
         return [dict(r) for r in rows]
