@@ -40,7 +40,14 @@ TWITCH_CHANNELS = {
     "shivfps":    "ShivFPS",
 }
 STREAM_QUALITY = "best"          # streamlink quality: "best", "1080p60", "720p60"
-FRAME_PROCESS_INTERVAL = 0.5     # seconds between processed frames per channel
+FRAME_PROCESS_INTERVAL = 0.5     # seconds between processed frames per channel.
+# Restored 1.0->0.5 (2026-07-15) after the GPU CRAFT detector port (EASYOCR_DETECTOR_DML, bead hy2)
+# cut per-line OCR ~305->~65ms. Measured (scratchpad/throughput_harness.py, DML detector): 0.5s now
+# runs peak-fight at 1.44x realtime (was 0.54x on CPU, which dropped frames in fights) -> 0.5s is
+# affordable again, and 0.5s gives the full ~90% golden recall (vs ~78% at 1.0s). Finest useful
+# cadence: the killfeed shows only 5 lines and a burst line can scroll off in ~1-2s, so 0.5s best
+# catches fast-cycling kills. (On a non-DML machine the detector falls back to CPU torch and this
+# becomes overloaded again -- lower to 1.0 there.)
 
 # ==================== STREAMER DETECTION ====================
 STREAMER_ALIASES = {
@@ -204,6 +211,13 @@ STREAMER_SEARCH_ZONES = {
 # it originally used was retired; only this classifier moved to Claude — the async OCR-correction
 # queue in gemini_queue.py is a separate system and is unaffected.)
 CALIBRATE_VISION_MODEL       = "claude-sonnet-5"  # Anthropic model for region classification
+# Classify candidate killfeed regions with LOCAL free EasyOCR (bead n7r) instead of the paid Claude
+# vision call: OCR each candidate region and keep the ones whose text matches killfeed signatures
+# (<GUN_ICON>/<KILL_ICON> markers or event words like eliminated/knocked/bleed/shield/spotted). $0,
+# no Anthropic-credit dependency (bead q1t), and grounded in actual detected killfeed content. Falls
+# back to Claude only if this is False. Also tightens detection -> fewer lines hit the CPU recognizer,
+# which is the multi-stream throughput bottleneck (bead hy2 / TesseractApexOCR-2st).
+CALIBRATE_LOCAL_OCR          = True
 # Re-enabled 2026-07-09 after adding the COVERAGE GUARD (see KILLFEED_TOP_MAX_FRAC below and
 # _derive_zone_from_regions): candidate zones that anchor below the killfeed's fixed upper band
 # (the facecam/HUD mislabel that used to drop kills) are now rejected, and zone height is capped.
@@ -492,6 +506,26 @@ EASYOCR_LANGUAGES = ['en']               # Languages for EasyOCR reader (add 'ko
 EASYOCR_GPU = True                       # Use GPU if available; auto-falls back to CPU
 EASYOCR_GAP_THRESHOLD = 80               # Horizontal pixel gap to insert <GUN_ICON> between words
 EASYOCR_CUSTOM_MODEL_DIR = Path("models/easyocr_custom")  # Path to user_network_directory containing apex.pth
+# Run the CRAFT text DETECTOR (87% of per-line OCR cost) on the GPU via onnxruntime-directml instead
+# of CPU torch (bead hy2). Measured 13-26x on the detector / ~6-7x per line, numerically identical to
+# torch (1.8e-07). Auto-falls back to the stock torch CRAFT if DirectML or the onnx model is
+# unavailable (see craft_onnx.install_dml_detector) -- so it's safe to leave True on non-DML machines.
+EASYOCR_DETECTOR_DML = True
+EASYOCR_CRAFT_ONNX = EASYOCR_CUSTOM_MODEL_DIR / "craft.onnx"  # generated at first run; models/ gitignored
+# EasyOCR dynamic-int8-quantizes the recognizer (VGG+BiLSTM+CTC) by default. MEASURED on this AMD CPU:
+# int8 is ~2-3x SLOWER than fp32 (its fbgemm int8 kernels are Intel-VNNI-oriented; the quantized LSTM
+# especially regresses on Zen), for equal-or-better accuracy (golden recall/prec identical, attacker
+# +1). So we DISABLE quantization: fp32 recognizer = ~2.1x faster per line (96->45ms), the biggest
+# lever on the multi-stream (CPU-recognizer-bound) throughput ceiling. Set True only if a future
+# CPU/backend actually accelerates int8 (re-measure with scratchpad/recog_quant_validate.py).
+EASYOCR_RECOGNIZER_QUANT = False
+# Cap torch CPU intra-op threads. Torch's default (= physical cores, 8 here) means each of N concurrent
+# stream-worker threads spawns 8 -> N*8 threads oversubscribe 16 cores and CRUSH multi-stream OCR
+# throughput. MEASURED (scratchpad/concurrency_threads.py): aggregate lines/s at default-8 vs 2 =
+# 27->61 (6 workers, 2.25x) / 33->54 (4 workers, 1.66x). 2 is the sweet spot across 4-6 workers
+# (near-optimal multi-stream; single-stream cost trivial 48->53ms, and single-stream isn't the
+# bottleneck). Set 0 to leave torch's default. Applied once at reader init.
+EASYOCR_TORCH_THREADS = 2
 
 # ==================== PREDATOR LEADERBOARD REFRESH ====================
 # apex_ranked_leaderboard.csv (ground truth of current Predator names, seeded as protected
@@ -578,7 +612,14 @@ SKIP_NON_ENGLISH_CROPS = True  # Suppress crop saving for flagged channels
 
 # ==================== AUTO-DISCOVERY ====================
 STREAM_REFRESH_INTERVAL = 1800  # Seconds between periodic top-stream re-queries (--top mode)
-TOP_STREAMS_COUNT       = 20    # Default number of top Apex streams to watch when no channels specified
+TOP_STREAMS_COUNT       = 6     # Default number of top Apex streams to watch when no channels specified.
+# Set to 6 (2026-07-15), LIVE-VERIFIED @ 0.5s (scratchpad/live_probe.py): all 6 streams kept up, worst
+# lag 0.9s. Three throughput fixes this session lifted the multi-stream ceiling from 3 -> 6: (1) DML
+# CRAFT detector (EASYOCR_DETECTOR_DML, bead hy2); (2) fp32 recognizer (EASYOCR_RECOGNIZER_QUANT=False,
+# int8 default is ~2x SLOWER on this AMD CPU); (3) torch thread cap (EASYOCR_TORCH_THREADS=2, avoids
+# N_workers*8 core oversubscription -- the final ~2x). Progression at 6 streams: int8+default=227s
+# backlog; fp32+default=56s; full stack=0.9s. This was under the GENERIC over-detecting box, so local
+# calibration (CALIBRATE_LOCAL_OCR, bead n7r) adds headroom -> ~8 likely fine; verify before raising.
 LIVENESS_CHECK_INTERVAL = 120   # Seconds between liveness sweeps (all modes) — catches streams that
                                  # ended mid-session without the demux loop raising, which otherwise
                                  # silently freezes OCR on the last on-screen content indefinitely

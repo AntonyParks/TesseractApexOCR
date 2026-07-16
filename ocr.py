@@ -52,6 +52,13 @@ def _get_easyocr_reader():
             if _easyocr_reader is None:               # double-check under lock
                 import easyocr
                 import torch
+                # Cap torch CPU intra-op threads to avoid N_workers*default oversubscription of cores,
+                # which crushes multi-stream OCR throughput (config comment; measured ~2x). Process-wide.
+                if EASYOCR_TORCH_THREADS:
+                    try:
+                        torch.set_num_threads(EASYOCR_TORCH_THREADS)
+                    except Exception as e:
+                        print(f"[EasyOCR] set_num_threads({EASYOCR_TORCH_THREADS}) failed: {e}")
                 gpu = EASYOCR_GPU and torch.cuda.is_available()
                 
                 custom_model = None
@@ -63,12 +70,22 @@ def _get_easyocr_reader():
                     _easyocr_reader = easyocr.Reader(
                         EASYOCR_LANGUAGES,
                         gpu=gpu,
+                        quantize=EASYOCR_RECOGNIZER_QUANT,
                         recog_network=custom_model,
                         user_network_directory=str(EASYOCR_CUSTOM_MODEL_DIR.absolute()),
                         model_storage_directory=str(EASYOCR_CUSTOM_MODEL_DIR.absolute())
                     )
                 else:
-                    _easyocr_reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=gpu)
+                    _easyocr_reader = easyocr.Reader(EASYOCR_LANGUAGES, gpu=gpu,
+                                                     quantize=EASYOCR_RECOGNIZER_QUANT)
+                # Move the CRAFT detector to the GPU via onnxruntime-directml (bead hy2). Drop-in swap
+                # of reader.detector; auto-falls back to torch CRAFT on any failure, so OCR never breaks.
+                if EASYOCR_DETECTOR_DML:
+                    try:
+                        import craft_onnx
+                        craft_onnx.install_dml_detector(_easyocr_reader, str(EASYOCR_CRAFT_ONNX))
+                    except Exception as e:
+                        print(f"[EasyOCR] DirectML detector unavailable, using torch CRAFT: {e}")
                 print(f"[EasyOCR] Reader ready.")
     return _easyocr_reader
 

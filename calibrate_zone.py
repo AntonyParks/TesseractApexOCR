@@ -27,6 +27,7 @@ import base64
 import io
 import json
 import os
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -44,6 +45,7 @@ from config import (
     AUTO_CALIBRATE_KILLFEED_HEIGHT_FRAC, AUTO_CALIBRATE_MIN_KILLFEED_LINES,
     AUTO_CALIBRATE_CONFIRM_OVERLAP, KILLFEED_TOP_MAX_FRAC, KILLFEED_MAX_SPAN_FRAC,
     CALIBRATION_CACHE_PATH, CALIBRATE_VISION_MODEL, DETECT_MIN_LINES, STREAMER_SEARCH_ZONES,
+    CALIBRATE_LOCAL_OCR,
 )
 from detect_killfeed import detect_for_stream, detect_killfeed_from_frame
 from detect_ranked import is_ranked_game
@@ -273,7 +275,71 @@ def _draw_numbered_regions(frame_bgra: np.ndarray, regions: list[dict]) -> np.nd
     return display
 
 
+# Killfeed text signatures for the local OCR classifier. The <GUN_ICON>/<KILL_ICON> markers
+# (ocr_with_easyocr inserts them at a weapon-icon-sized gap between two names) are the defining
+# structure of a kill/knock line and don't occur in chat/HUD/ping text; the event words cover the
+# icon-less killfeed lines (spotted / shield broken / landed nearby / bleed out / reviving).
+_KILLFEED_EVENT_WORDS = frozenset({
+    "eliminated", "knocked", "bleed", "shield", "spotted", "pinged", "scan", "audio",
+    "reviving", "revealed", "assist", "nearby", "landed",
+})
+
+
+# OCR-robust [Bleed Out] death marker (reused from parsers.py:424): the bracket/spacing drop and
+# 'bleed'/'ou' get garbled many ways, but the bleed+ou structure is distinctive to the killfeed.
+_BLEED_OUT_RE = re.compile(r"\[?\s*b[il]ee?d\s*[oqdgc0]?u[a-z]?\s*\]?", re.IGNORECASE)
+
+
+def _text_is_killfeed(text: str) -> bool:
+    if not text:
+        return False
+    low = text.lower()
+    if "<gun_icon>" in low or "<kill_icon>" in low:
+        return True
+    if any(w in low for w in _KILLFEED_EVENT_WORDS):
+        return True
+    return bool(_BLEED_OUT_RE.search(low))
+
+
+def _classify_regions_local(frame_bgra: np.ndarray, regions: list[dict]) -> list[dict] | None:
+    """Local, free replacement for Claude classification (bead n7r): OCR each candidate region with
+    the already-loaded EasyOCR reader and label it 'killfeed' iff its text matches killfeed
+    signatures (<GUN_ICON>/<KILL_ICON> or event words). Same {index,label,confidence} contract as
+    the Claude classifier, so _split_classifications / the retry + two-attempt-agreement flow are
+    unchanged. Killfeed is intermittent, so a frame with no active feed simply yields no 'killfeed'
+    regions -- the worker retries on later frames until a real feed is captured (attempt_calibration
+    _from_frame is called repeatedly and only commits when two attempts agree)."""
+    if not regions:
+        return None
+    import ocr  # deferred: heavy (torch/easyocr) and only needed when local calibration runs
+    fh, fw = frame_bgra.shape[:2]
+    out = []
+    for i, r in enumerate(regions):
+        x0, y0 = r["left"], r["top"]
+        x1, y1 = min(fw, x0 + r["width"]), min(fh, y0 + r["height"])
+        text = ""
+        if x1 > x0 and y1 > y0:
+            crop = frame_bgra[y0:y1, x0:x1]
+            try:
+                proc = ocr.preprocess_for_easyocr(crop)[0]
+                if not ocr.is_empty_line(proc):
+                    text = ocr.ocr_with_easyocr(proc, color_img=crop)
+            except Exception:
+                text = ""
+        label = "killfeed" if _text_is_killfeed(text) else "other_noise"
+        out.append({"index": i, "label": label, "confidence": 1.0})
+    return out
+
+
 def _classify_regions(frame_bgra: np.ndarray, regions: list[dict]) -> list[dict] | None:
+    """Classify candidate regions as killfeed / not. Routes to the local free OCR classifier
+    (CALIBRATE_LOCAL_OCR, bead n7r) or the paid Claude vision classifier."""
+    if CALIBRATE_LOCAL_OCR:
+        return _classify_regions_local(frame_bgra, regions)
+    return _classify_regions_claude(frame_bgra, regions)
+
+
+def _classify_regions_claude(frame_bgra: np.ndarray, regions: list[dict]) -> list[dict] | None:
     """Ask Claude vision to classify each numbered candidate region. Returns the list of
     {index, label, confidence} dicts, or None on any failure (no client, API error, or
     malformed response)."""

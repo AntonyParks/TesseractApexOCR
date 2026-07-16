@@ -92,3 +92,9 @@ wsproto==1.3.2
 xxhash==3.6.0
 yarl==1.23.0
 easyocr
+# GPU CRAFT detector via DirectML (bead hy2, craft_onnx.py). onnxruntime-directml is Windows/DirectML-
+# only; on other platforms omit it (the code auto-falls back to torch CRAFT). onnx+onnxscript are for
+# the first-run CRAFT->ONNX export.
+onnxruntime-directml==1.24.4
+onnx==1.22.0
+onnxscript==0.7.1
