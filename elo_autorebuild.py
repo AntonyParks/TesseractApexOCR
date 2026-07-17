@@ -117,23 +117,30 @@ def atomic_swap(temp_db: Path, dst_db: Path, timeout_s: float = 60.0) -> None:
             pass
 
 
-def guard_check(killfeed: Path, elo_dst: Path) -> None:
-    """Warn-only DB regression check (Layer A structural invariants on the freshly-swapped DBs +
-    Layer B identity fixtures on the deployed code). Never raises; logs a one-line summary plus any
-    hard regressions and the known-gap count. Because this loop runs continuously alongside capture,
-    a corrupt rebuild OR a code change that regressed identity resolution surfaces in the operator's
-    log within a cycle, not days later on the board. (Beads owns core.hooksPath, so continuous
-    guarding here is the beads-safe substitute for a pre-commit gate.)"""
+def guard_check(killfeed: Path, elo_dst: Path, run_drift: bool = False) -> None:
+    """Warn-only DB regression check on the freshly-rebuilt state. Layer A (structural invariants on
+    the swapped DBs) + Layer B (identity fixtures on the deployed code) run every cycle (cheap); Layer
+    C (golden drift snapshot, ~20s) runs only when run_drift is set -- gated to clean cycles so its
+    cost is hourly, not every rebuild. Never raises; logs one line with hard regressions, known-gap
+    count, and (on drift runs) whether the fixed golden game's outcome changed. Because this loop runs
+    continuously alongside capture, a corrupt rebuild OR a code change that regressed identity
+    resolution surfaces in the operator's log within a cycle. (Beads owns core.hooksPath, so
+    continuous guarding here is the beads-safe substitute for a pre-commit gate.)"""
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent / "tools" / "golden"))
-        from db_regression import run_layer_a, run_layer_b
+        from db_regression import run_layer_a, run_layer_b, run_layer_c
         results = run_layer_a(killfeed, elo_dst) + run_layer_b()
+        if run_drift:
+            results += run_layer_c()
         hard = [r.name for r in results if not r.skipped and r.severity == "fail" and r.count]
         gaps = sum(1 for r in results if not r.skipped and r.severity == "gap" and r.count)
+        drift = sum(1 for r in results if not r.skipped and r.severity == "warn" and r.count)
+        tail = f"{gaps} known gap(s)" + (f", {drift} drift" if run_drift and drift else
+                                         (", no drift" if run_drift else ""))
         if hard:
-            log(f"cycle guard: {len(hard)} REGRESSION(S): {', '.join(hard)}  ({gaps} known gap(s))")
+            log(f"cycle guard: {len(hard)} REGRESSION(S): {', '.join(hard)}  ({tail})")
         else:
-            log(f"cycle guard: all invariants + identity fixtures pass ({gaps} known gap(s))")
+            log(f"cycle guard: all invariants + fixtures pass ({tail})")
     except Exception as e:
         log(f"cycle guard: check skipped ({e})")
 
@@ -177,7 +184,7 @@ def main() -> int:
             atomic_swap(temp, dst)
             dt = time.time() - t0
             log(f"cycle {cycle}: swapped into {dst.name} ({dt:.0f}s)")
-            guard_check(killfeed, dst)   # warn-only invariant check on the freshly-swapped DBs
+            guard_check(killfeed, dst, run_drift=is_clean)   # A+B every cycle; C (drift) on clean cycles
         except Exception as e:
             log(f"cycle {cycle} FAILED: {e}")
 
