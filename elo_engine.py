@@ -21,7 +21,7 @@ from elo_db import (
     ELO_DB_PATH, get_player_rating, update_player_rating,
     upsert_match, upsert_match_kills, upsert_placement,
 )
-from match_detector import Match, get_player_survival, CONF_FLOOR
+from match_detector import Match, get_player_survival
 
 STARTING_ELO = glicko.RATING0
 ELO_FLOOR = 100.0
@@ -323,13 +323,20 @@ def _is_legend_name(name: str) -> bool:
 
 
 def _victim_conf_ok(player: str, match: Match) -> bool:
-    """Check if this player's victim events pass the confidence threshold."""
+    """Return True if this player is a valid, rateable victim in this match.
+
+    This used to also require victim_conf >= CONF_FLOOR, but that 'confidence' is the database
+    NAME-MATCH score (how well the name matches an already-seen player), NOT OCR read quality --
+    it is bimodal 0.0 (first-time / unmatched name) vs >=0.5 (seen before). Gating on it silently
+    dropped every clean FIRST-TIME player from ELO (audit 2026-07-16: ~40% of eliminations, incl.
+    perfect reads like 'neverglow', 'hello vincent') and is a prime cause of sparse placement
+    coverage. Structural garbage is still excluded by _is_valid_player (via _is_legend_name) --
+    noise, ping/twitch artifacts, high-digit-ratio, tag-only names -- so we drop only the
+    familiarity penalty, not the garbage defense. (bead 7ls)
+    """
     if _is_legend_name(player):
         return False
-    for k in match.kills:
-        if k.victim == player and k.victim_conf >= CONF_FLOOR:
-            return True
-    return False
+    return any(k.victim == player for k in match.kills)
 
 
 def batch_reprocess(matches: list[Match], db_path: Path = ELO_DB_PATH) -> dict:
