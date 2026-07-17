@@ -569,18 +569,23 @@ def flush_old_events(event_tracker, now, event_crops=None, streamer=""):
                 # read population instead of trusting whichever icon the last frame happened to
                 # read. ICON_VOTE_LOG instruments the decision even when the vote is disabled, so
                 # thresholds can be calibrated before ICON_VOTE_ENABLED is flipped on.
+                # icon_vote is persisted for audit regardless of whether the vote is applied.
+                icon_vote = ''
                 if (ICON_VOTE_ENABLED or ICON_VOTE_LOG):
                     decision, st = _icon_vote(variants)
+                    icon_vote = decision
                     if ICON_VOTE_LOG and st['kill'] > 0:
                         print(f"[IconVote:{streamer}] '{best_text[:48]}' reads={st['reads']} "
                               f"kill={st['kill']} gun={st['gun']} kill_run={st['kill_run']} "
                               f"-> {decision}" + ("" if ICON_VOTE_ENABLED else " (log-only)"))
                     if ICON_VOTE_ENABLED:
                         best_text = _apply_icon_decision(best_text, decision)
+                else:
+                    icon_vote = _gap_marker_class(best_text) or ''
                 crop_tuple = event_crops.pop(canonical_text, None) if event_crops is not None else None
                 crop = crop_tuple[0] if crop_tuple else None
                 crop_filename = crop_tuple[1] if crop_tuple else ""
-                to_write.append((last_seen, best_text, crop, crop_filename))
+                to_write.append((last_seen, best_text, crop, crop_filename, icon_vote))
             to_delete.append(canonical_text)
     for canonical_text in to_delete:
         del event_tracker[canonical_text]
@@ -1268,7 +1273,7 @@ class ChannelWorker(threading.Thread):
 
     def _write_events(self, completed_events: list):
         import db_log
-        for event_time, best_text, crop, crop_filename in completed_events:
+        for event_time, best_text, crop, crop_filename, icon_vote in completed_events:
             with self.db_lock:
                 parsed = parse_killfeed_line(best_text, self.db, event_time)
             if not parsed['event_type']:
@@ -1306,7 +1311,8 @@ class ChannelWorker(threading.Thread):
                     victim_conf=parsed.get("victim_conf", 1.0),
                     source="easyocr" if USE_EASYOCR else ("trocr" if USE_TROCR else "tesseract"),
                     gemini_corrected=0,
-                    crop_filename=crop_filename
+                    crop_filename=crop_filename,
+                    icon_vote=icon_vote,
                 )
             except Exception as e:
                 print(f"[{self.streamer}] DB write error: {e}")

@@ -207,6 +207,11 @@ CREATE TABLE IF NOT EXISTS events (
     source           TEXT    DEFAULT 'trocr',
     gemini_corrected INTEGER DEFAULT 0,
     crop_filename    TEXT    DEFAULT '',
+    -- Audit provenance: icon_vote is the kill/knock icon-vote decision for this line ('kill'/'gun'/
+    -- '' if no marker); read_count is how many OCR reads collapsed into this row via the dedup /
+    -- sticky-line suppression below (1 = a single read, no suppression).
+    icon_vote        TEXT    NOT NULL DEFAULT '',
+    read_count       INTEGER NOT NULL DEFAULT 1,
     created_at       INTEGER DEFAULT (strftime('%s','now'))
 );
 
@@ -222,10 +227,20 @@ _INSERT = """
 INSERT INTO events
     (streamer, timestamp, raw_text, canonical, event_type,
      attacker, victim, attacker_conf, victim_conf,
-     source, gemini_corrected, crop_filename)
+     source, gemini_corrected, crop_filename, icon_vote)
 VALUES
-    (?,?,?,?,?,?,?,?,?,?,?,?)
+    (?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Idempotent additive migrations for DBs created before a column existed.
+    CREATE TABLE IF NOT EXISTS never alters an existing table, so add-if-missing here."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(events)")}
+    if "icon_vote" not in cols:
+        conn.execute("ALTER TABLE events ADD COLUMN icon_vote TEXT NOT NULL DEFAULT ''")
+    if "read_count" not in cols:
+        conn.execute("ALTER TABLE events ADD COLUMN read_count INTEGER NOT NULL DEFAULT 1")
 
 # ---------------------------------------------------------------------------
 # Connection management
@@ -247,6 +262,7 @@ def _get_write_conn(path: Path) -> sqlite3.Connection:
         _write_conn.row_factory = sqlite3.Row
         _db_path_used = path
         _write_conn.executescript(_SCHEMA)
+        _migrate(_write_conn)
         _write_conn.commit()
     return _write_conn
 
@@ -313,6 +329,7 @@ def _import_csv(db_path: Path, csv_path: Path) -> int:
                 "trocr",   # source
                 0,         # gemini_corrected
                 "",        # crop_filename
+                "",        # icon_vote (unknown for legacy CSV rows)
             ))
 
     with _write_lock:
@@ -336,6 +353,7 @@ def insert_event(
     source: str = "trocr",
     gemini_corrected: int = 0,
     crop_filename: str = "",
+    icon_vote: str = "",
     db_path: Optional[Path] = None,
 ) -> int:
     """Thread-safe insert. Returns the new row id (or the existing row's id if this is a
@@ -362,6 +380,10 @@ def insert_event(
                 (streamer, event_type, attacker, victim, cutoff)
             ).fetchone()
             if existing:
+                # Suppressed as an exact-dedup re-read: record that this row absorbed another read.
+                conn.execute("UPDATE events SET read_count = read_count + 1 WHERE id = ?",
+                             (existing["id"],))
+                conn.commit()
                 return existing["id"]
 
             # Fuzzy sticky-line chain suppression (see comment on STICKY_CHAIN_GAP_SECONDS above).
@@ -426,6 +448,10 @@ def insert_event(
                             or (match["len"] > STICKY_CHAIN_MAX_ROWS
                                 and span > STICKY_CHAIN_MIN_SPAN_SECONDS))
             if suppress and match["id"] is not None:
+                # Suppressed as a sticky-line re-read: record that the kept row absorbed another read.
+                conn.execute("UPDATE events SET read_count = read_count + 1 WHERE id = ?",
+                             (match["id"],))
+                conn.commit()
                 return match["id"]
             # This row will be inserted (kept): record its victim for the guard's future comparisons.
             if vic_norm and vic_norm not in match["vics"]:
@@ -435,7 +461,7 @@ def insert_event(
         cursor = conn.execute(_INSERT, (
             streamer, timestamp, raw_text, canonical, event_type,
             attacker, victim, attacker_conf, victim_conf,
-            source, gemini_corrected, crop_filename
+            source, gemini_corrected, crop_filename, icon_vote
         ))
         conn.commit()
         if active_cluster is not None:
