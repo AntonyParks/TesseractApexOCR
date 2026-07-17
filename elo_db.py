@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS match_kills (
     kill_order    INTEGER NOT NULL,
     attacker_conf REAL NOT NULL DEFAULT 0.0,
     victim_conf   REAL NOT NULL DEFAULT 0.0,
+    -- Provenance back-link to killfeed.db events.id (the trocr/easyocr row ELO used) and its
+    -- source crop, so a rating can be traced rating->placement->kill->event->raw_text/crop.
+    source_event_id INTEGER,
+    crop_filename   TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (match_id) REFERENCES matches(match_id)
 );
 
@@ -77,10 +81,21 @@ def get_conn(path: Path = ELO_DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Idempotent additive migrations for DBs created before a column existed.
+    CREATE TABLE IF NOT EXISTS never alters an existing table, so add-if-missing here."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(match_kills)")}
+    if "source_event_id" not in cols:
+        conn.execute("ALTER TABLE match_kills ADD COLUMN source_event_id INTEGER")
+    if "crop_filename" not in cols:
+        conn.execute("ALTER TABLE match_kills ADD COLUMN crop_filename TEXT NOT NULL DEFAULT ''")
+
+
 def init_db(path: Path = ELO_DB_PATH) -> None:
     """Create tables and indexes if they don't exist."""
     with get_conn(path) as conn:
         conn.executescript(_SCHEMA)
+        _migrate(conn)
 
 
 def drop_db(path: Path = ELO_DB_PATH) -> None:
@@ -112,7 +127,8 @@ def upsert_match(match_id: str, streamer: str, start_time: str, end_time: str,
 
 def upsert_match_kills(kills: list[dict], path: Path = ELO_DB_PATH) -> None:
     """Bulk insert kill events. Each dict must have keys:
-    match_id, timestamp, attacker, victim, kill_order, attacker_conf, victim_conf.
+    match_id, timestamp, attacker, victim, kill_order, attacker_conf, victim_conf,
+    source_event_id, crop_filename.
     """
     with get_conn(path) as conn:
         # Delete existing kills for these match_ids to allow idempotent re-runs
@@ -123,9 +139,10 @@ def upsert_match_kills(kills: list[dict], path: Path = ELO_DB_PATH) -> None:
         )
         conn.executemany("""
             INSERT INTO match_kills
-                (match_id, timestamp, attacker, victim, kill_order, attacker_conf, victim_conf)
+                (match_id, timestamp, attacker, victim, kill_order, attacker_conf, victim_conf,
+                 source_event_id, crop_filename)
             VALUES (:match_id, :timestamp, :attacker, :victim, :kill_order,
-                    :attacker_conf, :victim_conf)
+                    :attacker_conf, :victim_conf, :source_event_id, :crop_filename)
         """, kills)
 
 
@@ -237,7 +254,8 @@ def get_match(match_id: str, path: Path = ELO_DB_PATH) -> Optional[dict]:
             return None
 
         kills = conn.execute("""
-            SELECT kill_order, attacker, victim, timestamp, attacker_conf, victim_conf
+            SELECT kill_order, attacker, victim, timestamp, attacker_conf, victim_conf,
+                   source_event_id, crop_filename
             FROM match_kills WHERE match_id = ? ORDER BY kill_order
         """, (match_id,)).fetchall()
 

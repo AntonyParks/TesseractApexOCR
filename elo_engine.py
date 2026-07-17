@@ -109,6 +109,8 @@ def process_match(match: Match, ratings_cache: dict, db_path: Path = ELO_DB_PATH
             "kill_order": k.kill_order,
             "attacker_conf": k.attacker_conf,
             "victim_conf": k.victim_conf,
+            "source_event_id": k.source_event_id,
+            "crop_filename": k.crop_filename,
         }
         for k in match.kills
     ]

@@ -37,6 +37,10 @@ class KillEvent:
     attacker_conf: float
     victim_conf: float
     kill_order: int = 0
+    # Provenance back-link to the source killfeed.db events row and its crop. Populated only on the
+    # DB rebuild path (detect_matches_from_db); the legacy CSV path leaves the defaults.
+    source_event_id: Optional[int] = None
+    crop_filename: str = ""
 
 
 @dataclass
@@ -330,7 +334,7 @@ def detect_matches_from_db(
     # field), and crediting those would hand kills to dying players.
     rows = conn.execute(
         """
-        SELECT streamer, timestamp, attacker, victim, attacker_conf, victim_conf
+        SELECT id, streamer, timestamp, attacker, victim, attacker_conf, victim_conf, crop_filename
         FROM events
         WHERE ((event_type = 'Kill' AND victim IS NOT NULL AND TRIM(victim) != '')
                OR (event_type = 'BleedOut' AND attacker IS NOT NULL AND TRIM(attacker) != ''
@@ -356,7 +360,7 @@ def detect_matches_from_db(
     conn.close()
 
     by_streamer: dict[str, list[tuple[datetime, dict]]] = {}
-    for (streamer, ts_str, attacker, victim, a_conf, v_conf) in rows:
+    for (event_id, streamer, ts_str, attacker, victim, a_conf, v_conf, crop_filename) in rows:
         ts = _parse_ts(ts_str)
         if not ts:
             continue
@@ -375,6 +379,8 @@ def detect_matches_from_db(
             "victim":   victim   or None,
             "attacker_conf": a_conf,
             "victim_conf":   v_conf,
+            "source_event_id": event_id,
+            "crop_filename":   crop_filename or "",
         }))
 
     # Glue events join the same per-streamer stream, flagged with '_fp'. They hold match
@@ -434,6 +440,8 @@ def _build_matches(
                         timestamp=ts, attacker=d["attacker"], victim=d["victim"],
                         attacker_conf=d["attacker_conf"], victim_conf=d["victim_conf"],
                         kill_order=order,
+                        source_event_id=d.get("source_event_id"),
+                        crop_filename=d.get("crop_filename", ""),
                     )
                     for order, (ts, d) in enumerate(kill_entries, start=1)
                 ]
@@ -514,6 +522,8 @@ def _merge_pair(primary: Match, secondary: Match,
                 timestamp=k.timestamp, attacker=k.attacker, victim=k.victim,
                 attacker_conf=max(k.attacker_conf, other.attacker_conf),
                 victim_conf=max(k.victim_conf, other.victim_conf),
+                # keep the primary stream's provenance back-link (its copy is retained)
+                source_event_id=k.source_event_id, crop_filename=k.crop_filename,
             )
         merged_kills.append(k)
     for k in secondary.kills:
@@ -523,6 +533,7 @@ def _merge_pair(primary: Match, secondary: Match,
             timestamp=k.timestamp - timedelta(seconds=skew),
             attacker=k.attacker, victim=k.victim,
             attacker_conf=k.attacker_conf, victim_conf=k.victim_conf,
+            source_event_id=k.source_event_id, crop_filename=k.crop_filename,
         ))
 
     merged_kills.sort(key=lambda k: k.timestamp)
