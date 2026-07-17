@@ -19,11 +19,15 @@ Run:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
 import sqlite3
 import sys
 import tempfile
+import types
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -360,6 +364,158 @@ def run_layer_b() -> list[Result]:
 
 
 # ---------------------------------------------------------------------------
+# Layer C: drift snapshot
+# ---------------------------------------------------------------------------
+# Replay the vision-golden game deterministically through the FULL identity->ELO pipeline (parse ->
+# db_log dedup -> match detection -> Glicko -> leaderboard dedupe) and snapshot the aggregate
+# outcome (player count, credited kills, the board, the merge decisions). Compare to a committed
+# baseline: any delta means a code change shifted this fixed game's result -- caught even when no
+# single Layer-A invariant or Layer-B fixture names it. Drift is a WARN (often intended); the
+# operator re-baselines deliberately with --update-baseline after reviewing the diff.
+#
+# Determinism: a fresh PlayerDatabase seeded ONLY with static legends (never the live-mutating
+# player_names.json, which ocr.py rewrites on shutdown), db_log driven by golden video-time with
+# its sticky-chain state reset. So the snapshot depends only on the golden input + the code.
+
+_BASELINE = Path(__file__).resolve().parent / "data" / "db_snapshot_baseline.json"
+_C_EPOCH0 = 1_700_000_000
+_C_BASE_DT = datetime(2024, 1, 1)
+_C_ELIM = {"Kill", "BleedOut", "ChampionEliminated"}
+
+
+def _c_ts(t: float) -> str:
+    return (_C_BASE_DT + timedelta(seconds=float(t))).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _build_golden_snapshot() -> dict:
+    """Deterministically replay the golden game and return aggregate-outcome metrics."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))   # golden_lib lives next to us
+    import golden_lib
+    import db_log
+    import elo_db
+    import match_detector
+    import reprocess
+    from database import PlayerDatabase
+    from parsers import parse_killfeed_line
+
+    reads_path = os.path.join(golden_lib.DATA, "vod_capture", "reads.jsonl")
+    reads = [json.loads(l) for l in open(reads_path, encoding="utf-8")]
+    reads.sort(key=lambda r: r["t"])
+
+    tmp = Path(tempfile.mkdtemp())
+    kf = tmp / "kf.db"
+    elo = tmp / "elo.db"
+
+    clock = {"now": float(_C_EPOCH0)}
+    real_time = db_log.time
+    db_log.time = types.SimpleNamespace(time=lambda: clock["now"])   # db_log uses only time.time()
+    db_log._chain_state.clear()
+    try:
+        conn = db_log._get_write_conn(kf)
+        pdb = PlayerDatabase()
+        pdb.seed_legend_names()                                      # static context only
+        last_id = 0
+        for r in reads:
+            p = parse_killfeed_line(r["text"], pdb, r["t"])
+            if p.get("event_type") not in _C_ELIM:
+                continue
+            atk, vic = p.get("attacker") or "", p.get("victim") or ""
+            if not vic:
+                continue
+            clock["now"] = float(_C_EPOCH0 + r["t"])
+            rid = db_log.insert_event("replay", _c_ts(r["t"]), r["text"],
+                                      p.get("canonical", r["text"]), p["event_type"],
+                                      atk, vic, 1.0, 1.0, db_path=kf)
+            if rid and rid > last_id:                               # a NEW row (not suppressed)
+                conn.execute("UPDATE events SET created_at=? WHERE id=?",
+                             (int(_C_EPOCH0 + r["t"]), rid))
+                conn.commit()
+                last_id = rid
+    finally:
+        db_log.time = real_time
+        db_log._chain_state.clear()
+
+    elo_db.init_db(elo)
+    matches = match_detector.detect_matches_from_db(kf)
+    reprocess.batch_reprocess(matches, db_path=elo)
+    merges = reprocess.deduplicate_players(elo, dry_run=False)      # apply the leaderboard dedupe
+
+    e = sqlite3.connect(str(elo))
+    e.row_factory = sqlite3.Row
+    n_players = e.execute("SELECT COUNT(*) FROM player_ratings").fetchone()[0]
+    n_matches = e.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+    n_kills = e.execute("SELECT COUNT(*) FROM match_kills").fetchone()[0]
+    board = [[row["player"], round(row["elo"])] for row in e.execute(
+        "SELECT player, elo, rd FROM player_ratings ORDER BY (elo - 2*rd) DESC, player")]
+    e.close()
+    merge_list = sorted([[c, sorted(d)] for c, d, _ in merges])
+    return {"n_players": n_players, "n_matches": n_matches, "n_credited_kills": n_kills,
+            "board": board, "merges": merge_list}
+
+
+def _diff_board(base: list, snap: list) -> list[str]:
+    b = {p: elo for p, elo in base}
+    s = {p: elo for p, elo in snap}
+    out = []
+    for p in sorted(set(b) - set(s)):
+        out.append(f"removed {p!r} (was elo {b[p]})")
+    for p in sorted(set(s) - set(b)):
+        out.append(f"added {p!r} (elo {s[p]})")
+    for p in sorted(set(b) & set(s)):
+        if b[p] != s[p]:
+            out.append(f"elo {p!r}: {b[p]} -> {s[p]}")
+    return out
+
+
+def _diff_merges(base: list, snap: list) -> list[str]:
+    bset = {(c, tuple(d)) for c, d in base}
+    sset = {(c, tuple(d)) for c, d in snap}
+    out = []
+    for c, d in sorted(bset - sset):
+        out.append(f"no-longer-merged {c!r} <- {list(d)}")
+    for c, d in sorted(sset - bset):
+        out.append(f"newly-merged {c!r} <- {list(d)}")
+    return out
+
+
+def run_layer_c(update_baseline: bool = False) -> list[Result]:
+    try:
+        with open(os.devnull, "w") as dn, contextlib.redirect_stdout(dn):
+            snap = _build_golden_snapshot()
+    except Exception as e:
+        return [Result("snapshot.build", "logic", "fail", 1, [f"build error: {e}"],
+                       note="golden replay failed")]
+
+    if update_baseline:
+        _BASELINE.parent.mkdir(parents=True, exist_ok=True)
+        _BASELINE.write_text(json.dumps(snap, indent=2), encoding="utf-8")
+        return [Result("snapshot.baseline", "logic", "warn", 0,
+                       [f"wrote {_BASELINE.name}: {snap['n_players']} players, "
+                        f"{snap['n_credited_kills']} kills, {len(snap['merges'])} merges"],
+                       note="baseline regenerated")]
+
+    if not _BASELINE.exists():
+        return [Result("snapshot.baseline", "logic", "warn", 0, [], skipped=True,
+                       note="no baseline yet -- run: db_regression.py --layer C --update-baseline")]
+
+    base = json.loads(_BASELINE.read_text(encoding="utf-8"))
+    results: list[Result] = []
+    count_diffs = [f"{k}: {base.get(k)} -> {snap[k]}"
+                   for k in ("n_players", "n_matches", "n_credited_kills") if base.get(k) != snap[k]]
+    results.append(Result("snapshot.counts", "logic", "warn", len(count_diffs), count_diffs,
+                          note="golden-game aggregate counts drifted -- intended? re-baseline"))
+    board_diffs = _diff_board(base.get("board", []), snap["board"])
+    results.append(Result("snapshot.board", "logic", "warn", len(board_diffs),
+                          board_diffs[:_MAX_EXAMPLES],
+                          note="golden-game board (identity/elo) drifted -- intended? re-baseline"))
+    merge_diffs = _diff_merges(base.get("merges", []), snap["merges"])
+    results.append(Result("snapshot.merges", "logic", "warn", len(merge_diffs),
+                          merge_diffs[:_MAX_EXAMPLES],
+                          note="golden-game merge decisions drifted -- intended? re-baseline"))
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -422,13 +578,16 @@ def _summary(results: list[Result]) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="DB regression harness (Layers A + B)")
-    ap.add_argument("--layer", choices=["A", "B", "all"], default="all",
-                    help="A=structural invariants (needs DBs); B=identity fixtures (no DB); default all")
+    ap = argparse.ArgumentParser(description="DB regression harness (Layers A + B + C)")
+    ap.add_argument("--layer", choices=["A", "B", "C", "all"], default="all",
+                    help="A=structural invariants (needs DBs); B=identity fixtures; "
+                         "C=golden drift snapshot; default all")
     ap.add_argument("--db", type=Path, default=KILLFEED_DB_PATH, help="killfeed.db path")
     ap.add_argument("--elo-db", type=Path, default=ELO_DB_PATH, help="elo.db path")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--fail-on-warn", action="store_true", help="treat WARN as failure (exit 1)")
+    ap.add_argument("--update-baseline", action="store_true",
+                    help="Layer C: regenerate the golden drift baseline (deliberate re-baseline)")
     args = ap.parse_args()
 
     results: list[Result] = []
@@ -442,6 +601,11 @@ def main() -> int:
         results += b
         if not args.json:
             _print_section("DB REGRESSION  --  Layer B: labeled identity regression", b)
+    if args.layer in ("C", "all"):
+        c = run_layer_c(update_baseline=args.update_baseline)
+        results += c
+        if not args.json:
+            _print_section("DB REGRESSION  --  Layer C: golden drift snapshot", c)
 
     if args.json:
         print(json.dumps([{
