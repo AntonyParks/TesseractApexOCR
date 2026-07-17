@@ -76,6 +76,50 @@ export interface PlayerDetail {
   match_history: MatchHistory[];
 }
 
+// ---- Audit trace (OCR->ELO provenance) ----
+// One contributing kill joined back to its source killfeed event. The event fields are null when
+// the kill has no source_event_id back-link (e.g. a pre-backlink rebuild row).
+export interface AuditKill {
+  kill_order: number;
+  attacker: string;
+  victim: string;
+  timestamp: string;
+  attacker_conf: number;
+  victim_conf: number;
+  source_event_id: number | null;
+  crop_filename: string;
+  crop_streamer: string | null;
+  raw_text: string | null;
+  canonical: string | null;
+  event_type: string | null;
+  icon_vote: string | null;
+  read_count: number | null;
+}
+
+export interface AuditMatch {
+  match_id: string;
+  kill_order_out: number;
+  survived: number;
+  elo_before: number;
+  elo_after: number;
+  elo_change: number;
+  streamer: string;
+  start_time: string;
+  end_time: string;
+  kill_count: number;
+  kills: AuditKill[];
+}
+
+export interface PlayerAudit {
+  player: PlayerRating;
+  matches: AuditMatch[];
+}
+
+// Raw source crop for an event. Streamer/stem come from an AuditKill (crop_streamer + crop_filename).
+export function cropUrl(streamer: string, stem: string): string {
+  return `${BASE}/crops/${encodeURIComponent(streamer)}/${encodeURIComponent(stem)}`;
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { next: { revalidate: 60 } });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -99,4 +143,6 @@ export const api = {
     return get<{ total: number; matches: Match[] }>(`/matches?${q}`);
   },
   match: (id: string) => get<MatchDetail>(`/matches/${encodeURIComponent(id)}`),
+  auditPlayer: (name: string, limit = 50) =>
+    get<PlayerAudit>(`/audit/player/${encodeURIComponent(name)}?limit=${limit}`),
 };

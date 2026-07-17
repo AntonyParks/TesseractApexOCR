@@ -292,6 +292,50 @@ def get_match(match_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Audit surface — OCR->ELO traceability (crops + provenance)
+# ---------------------------------------------------------------------------
+
+_CROP_ROOT = CROP_OUTPUT_DIR.resolve()
+
+
+@app.get("/crops/{streamer}/{stem}")
+def get_crop(streamer: str, stem: str):
+    """Serve the RAW source crop for an event (crops/<streamer>/<stem>_raw.png) so a human can
+    eyeball a read. Filesystem-exposing GET: the resolved path is constrained to the crops root,
+    rejecting traversal even though names originate from the DB."""
+    from fastapi.responses import FileResponse
+    candidate = (_CROP_ROOT / streamer / f"{stem}_raw.png").resolve()
+    # Reject anything that escapes the crops root (`..`, absolute names, symlink games).
+    if _CROP_ROOT not in candidate.parents:
+        raise HTTPException(status_code=400, detail="Invalid crop path.")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Crop not found.")
+    return FileResponse(str(candidate), media_type="image/png")
+
+
+@app.get("/audit/player/{player}")
+def audit_player(player: str, limit: int = Query(50, ge=1, le=200)):
+    """OCR->ELO audit trace for one player: matches they placed in, each with the contributing
+    kills joined back to their source killfeed event (raw_text/canonical/icon_vote/read_count/crop)."""
+    if not elo_db.ELO_DB_PATH.exists():
+        raise HTTPException(status_code=503, detail="ELO database not found. Run reprocess.py first.")
+    rating = elo_db.get_player_rating(player)
+    if not rating:
+        raise HTTPException(status_code=404, detail=f"Player {player!r} not found in ELO database.")
+    matches = elo_db.get_player_audit(player, killfeed_path=KILLFEED_DB_PATH, limit=limit)
+    return {"player": rating, "matches": matches}
+
+
+@app.get("/audit/event/{event_id}")
+def audit_event(event_id: int):
+    """Reverse trace: a killfeed event row plus every match_kill (match/kill_order) it fed into ELO."""
+    detail = elo_db.get_event_audit(event_id, killfeed_path=KILLFEED_DB_PATH)
+    if not detail:
+        raise HTTPException(status_code=404, detail=f"Event {event_id} not found.")
+    return detail
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

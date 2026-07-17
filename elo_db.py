@@ -272,6 +272,64 @@ def get_match(match_id: str, path: Path = ELO_DB_PATH) -> Optional[dict]:
         }
 
 
+def get_player_audit(player: str, killfeed_path: Path, limit: int = 50,
+                     path: Path = ELO_DB_PATH) -> list[dict]:
+    """Full OCR->ELO audit trace for one player: each match they placed in, with the
+    contributing kills (as attacker or victim) joined back to the source killfeed.db events row
+    (raw_text / canonical / icon_vote / read_count / crop). killfeed.db is ATTACHed so the join
+    across the two databases happens in one query. crop_streamer is the stream that captured the
+    crop (may differ from the match's primary streamer after a cross-streamer merge)."""
+    with get_conn(path) as conn:
+        conn.execute("ATTACH ? AS kf", (str(killfeed_path),))
+        try:
+            placements = conn.execute("""
+                SELECT mp.match_id, mp.kill_order_out, mp.survived,
+                       mp.elo_before, mp.elo_after, mp.elo_change,
+                       m.streamer, m.start_time, m.end_time, m.kill_count
+                FROM match_placements mp JOIN matches m ON mp.match_id = m.match_id
+                WHERE mp.player = ? ORDER BY m.start_time DESC LIMIT ?
+            """, (player, limit)).fetchall()
+            out = []
+            for row in placements:
+                p = dict(row)
+                kills = conn.execute("""
+                    SELECT mk.kill_order, mk.attacker, mk.victim, mk.timestamp,
+                           mk.attacker_conf, mk.victim_conf, mk.source_event_id, mk.crop_filename,
+                           e.streamer AS crop_streamer, e.raw_text, e.canonical, e.event_type,
+                           e.icon_vote, e.read_count
+                    FROM match_kills mk
+                    LEFT JOIN kf.events e ON e.id = mk.source_event_id
+                    WHERE mk.match_id = ? AND (mk.attacker = ? OR mk.victim = ?)
+                    ORDER BY mk.kill_order
+                """, (p["match_id"], player, player)).fetchall()
+                p["kills"] = [dict(k) for k in kills]
+                out.append(p)
+            return out
+        finally:
+            conn.execute("DETACH kf")
+
+
+def get_event_audit(event_id: int, killfeed_path: Path, path: Path = ELO_DB_PATH) -> Optional[dict]:
+    """Reverse trace for a killfeed.db events.id: the full source row plus every match_kills that
+    references it (which match / kill_order it fed into ELO as)."""
+    kf = sqlite3.connect(str(killfeed_path))
+    kf.row_factory = sqlite3.Row
+    try:
+        ev = kf.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+    finally:
+        kf.close()
+    if not ev:
+        return None
+    with get_conn(path) as conn:
+        mks = conn.execute("""
+            SELECT mk.match_id, mk.kill_order, mk.attacker, mk.victim, mk.crop_filename,
+                   m.streamer, m.start_time
+            FROM match_kills mk JOIN matches m ON m.match_id = mk.match_id
+            WHERE mk.source_event_id = ?
+        """, (event_id,)).fetchall()
+    return {"event": dict(ev), "match_kills": [dict(x) for x in mks]}
+
+
 def get_total_rankings_count(min_matches: int = 1, path: Path = ELO_DB_PATH) -> int:
     with get_conn(path) as conn:
         row = conn.execute(
