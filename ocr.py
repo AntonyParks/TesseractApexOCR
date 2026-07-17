@@ -585,7 +585,10 @@ def flush_old_events(event_tracker, now, event_crops=None, streamer=""):
                 crop_tuple = event_crops.pop(canonical_text, None) if event_crops is not None else None
                 crop = crop_tuple[0] if crop_tuple else None
                 crop_filename = crop_tuple[1] if crop_tuple else ""
-                to_write.append((last_seen, best_text, crop, crop_filename, icon_vote))
+                # len(variants) = OCR reads that merged into this event during its on-screen life;
+                # persisted as read_count so a single-read (shaky) event is distinguishable from a
+                # line seen dozens of times, and sticky re-emissions accumulate onto the kept row.
+                to_write.append((last_seen, best_text, crop, crop_filename, icon_vote, len(variants)))
             to_delete.append(canonical_text)
     for canonical_text in to_delete:
         del event_tracker[canonical_text]
@@ -1273,7 +1276,7 @@ class ChannelWorker(threading.Thread):
 
     def _write_events(self, completed_events: list):
         import db_log
-        for event_time, best_text, crop, crop_filename, icon_vote in completed_events:
+        for event_time, best_text, crop, crop_filename, icon_vote, read_count in completed_events:
             with self.db_lock:
                 parsed = parse_killfeed_line(best_text, self.db, event_time)
             if not parsed['event_type']:
@@ -1313,6 +1316,7 @@ class ChannelWorker(threading.Thread):
                     gemini_corrected=0,
                     crop_filename=crop_filename,
                     icon_vote=icon_vote,
+                    read_count=read_count,
                 )
             except Exception as e:
                 print(f"[{self.streamer}] DB write error: {e}")

@@ -208,8 +208,10 @@ CREATE TABLE IF NOT EXISTS events (
     gemini_corrected INTEGER DEFAULT 0,
     crop_filename    TEXT    DEFAULT '',
     -- Audit provenance: icon_vote is the kill/knock icon-vote decision for this line ('kill'/'gun'/
-    -- '' if no marker); read_count is how many OCR reads collapsed into this row via the dedup /
-    -- sticky-line suppression below (1 = a single read, no suppression).
+    -- '' if no marker). read_count is the total OCR reads absorbed by this event: the reads that
+    -- merged into its flush emission (len(variants) in ocr.flush_old_events) plus the reads of any
+    -- later re-emissions folded onto this row by the dedup / sticky-line suppression below. A low
+    -- value flags a shaky one-off read; a high value a long-lived or sticky line.
     icon_vote        TEXT    NOT NULL DEFAULT '',
     read_count       INTEGER NOT NULL DEFAULT 1,
     created_at       INTEGER DEFAULT (strftime('%s','now'))
@@ -227,9 +229,9 @@ _INSERT = """
 INSERT INTO events
     (streamer, timestamp, raw_text, canonical, event_type,
      attacker, victim, attacker_conf, victim_conf,
-     source, gemini_corrected, crop_filename, icon_vote)
+     source, gemini_corrected, crop_filename, icon_vote, read_count)
 VALUES
-    (?,?,?,?,?,?,?,?,?,?,?,?,?)
+    (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
 
 
@@ -330,6 +332,7 @@ def _import_csv(db_path: Path, csv_path: Path) -> int:
                 0,         # gemini_corrected
                 "",        # crop_filename
                 "",        # icon_vote (unknown for legacy CSV rows)
+                1,         # read_count (legacy CSV: one row = one read)
             ))
 
     with _write_lock:
@@ -354,6 +357,7 @@ def insert_event(
     gemini_corrected: int = 0,
     crop_filename: str = "",
     icon_vote: str = "",
+    read_count: int = 1,
     db_path: Optional[Path] = None,
 ) -> int:
     """Thread-safe insert. Returns the new row id (or the existing row's id if this is a
@@ -380,9 +384,10 @@ def insert_event(
                 (streamer, event_type, attacker, victim, cutoff)
             ).fetchone()
             if existing:
-                # Suppressed as an exact-dedup re-read: record that this row absorbed another read.
-                conn.execute("UPDATE events SET read_count = read_count + 1 WHERE id = ?",
-                             (existing["id"],))
+                # Suppressed as an exact-dedup re-emission: fold this emission's OCR reads onto
+                # the kept row so read_count stays a true reads-absorbed total.
+                conn.execute("UPDATE events SET read_count = read_count + ? WHERE id = ?",
+                             (read_count, existing["id"]))
                 conn.commit()
                 return existing["id"]
 
@@ -448,9 +453,10 @@ def insert_event(
                             or (match["len"] > STICKY_CHAIN_MAX_ROWS
                                 and span > STICKY_CHAIN_MIN_SPAN_SECONDS))
             if suppress and match["id"] is not None:
-                # Suppressed as a sticky-line re-read: record that the kept row absorbed another read.
-                conn.execute("UPDATE events SET read_count = read_count + 1 WHERE id = ?",
-                             (match["id"],))
+                # Suppressed as a sticky-line re-emission: fold this emission's OCR reads onto the
+                # kept row so read_count accumulates across the line's full on-screen lifetime.
+                conn.execute("UPDATE events SET read_count = read_count + ? WHERE id = ?",
+                             (read_count, match["id"]))
                 conn.commit()
                 return match["id"]
             # This row will be inserted (kept): record its victim for the guard's future comparisons.
@@ -461,7 +467,7 @@ def insert_event(
         cursor = conn.execute(_INSERT, (
             streamer, timestamp, raw_text, canonical, event_type,
             attacker, victim, attacker_conf, victim_conf,
-            source, gemini_corrected, crop_filename, icon_vote
+            source, gemini_corrected, crop_filename, icon_vote, read_count
         ))
         conn.commit()
         if active_cluster is not None:
