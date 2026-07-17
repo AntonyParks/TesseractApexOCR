@@ -238,6 +238,7 @@ def detect_killfeed_regions(
     origin_y: int,
     frame_w: int = 0,
     search_zone_active: bool = False,
+    gap_map: np.ndarray | None = None,
 ) -> list[dict]:
     """Find killfeed line bounding boxes from an averaged brightness map.
 
@@ -314,8 +315,17 @@ def detect_killfeed_regions(
             width = int(bright_cols[-1]) - int(bright_cols[0]) + 1
             top   = origin_y + r_start
 
-            if _keep_width(width):
-                regions.append({"left": left, "top": top, "width": width, "height": h})
+            # Two adjacent killfeed events can cluster into one short band (gap <= _ROW_GAP_TOL,
+            # combined height <= _MAX_LINE_HEIGHT) and then interleave in OCR. Route through the
+            # gap-validated splitter: a true single line has no interior gap and passes straight
+            # through unsplit; a real two-row band splits into one region per event. (bead concat)
+            region = {"left": left, "top": top, "width": width, "height": h}
+            for sub in _force_split_tall_region(
+                region, brightness_map, origin_x, origin_y,
+                _MAX_SINGLE_LINE_HEIGHT, require_gap=True, gap_map=gap_map,
+            ):
+                if _keep_width(sub["width"]):
+                    regions.append(sub)
         else:
             # Oversized cluster (e.g. real killfeed lines merged with a webcam/chat
             # overlay below them) — attempt to split it into line-sized sub-bands
@@ -336,22 +346,50 @@ def detect_killfeed_regions(
     return regions
 
 
+# A candidate split row is a REAL inter-row gap only when its brightness is well below the band's
+# typical text-row brightness. Calibrated (2026-07-16) so two stacked killfeed rows always split
+# while a single line -- even a tall high-res one with internal glyph dips -- never does.
+_SPLIT_GAP_FRAC = 0.35
+# The killfeed is an overlay on gameplay, so the gap between two stacked rows is NOT dark on a bright
+# background (sky, snow) -- the detection map (thresh ~190) sees continuous "bright" and merges the
+# rows. But killfeed text is near-white (~255) while even bright backgrounds sit lower, so a HIGHER
+# threshold isolates the text and makes the inter-row gap empty and detectable. Used only for the
+# gap-finding row projection in require_gap mode. (bead: multi-line concat)
+_GAP_TEXT_THRESH = 235
+
+
 def _force_split_tall_region(
     region: dict,
     brightness_map: np.ndarray,
     origin_x: int,
     origin_y: int,
     max_height: int = 35,
+    require_gap: bool = False,
+    gap_map: np.ndarray | None = None,
 ) -> list[dict]:
-    """Recursively split a region by finding the local minimum row projection if its height exceeds max_height."""
+    """Recursively split a region at the horizontal gap between stacked text rows.
+
+    Two modes:
+      - Height-driven (require_gap=False, original behavior): split any region taller than
+        max_height at its best interior local-minimum row (used to rescue oversized webcam/chat
+        merges).
+      - Gap-driven (require_gap=True): split a region of ANY height, but ONLY at a genuine inter-row
+        gap -- a local-minimum row whose brightness is < _SPLIT_GAP_FRAC of the band's median row
+        brightness AND that leaves two sub-bands each >= _MIN_LINE_HEIGHT. This is what separates two
+        adjacent killfeed events the row-clusterer merged into one short band, without ever bisecting
+        a legitimate single line (which has no such gap). (bead: multi-line concat)
+    """
     h = region["height"]
-    if h <= max_height:
+    if h <= max_height and not require_gap:
         return [region]
 
     local_top = region["top"] - origin_y
     local_bot = local_top + h - 1
 
-    band = brightness_map[local_top : local_bot + 1, :]
+    # Gap-finding uses the text-isolated map when available (require_gap path) so the inter-row gap
+    # is visible even on a bright background; falls back to the detection map otherwise.
+    split_map = gap_map if (require_gap and gap_map is not None) else brightness_map
+    band = split_map[local_top : local_bot + 1, :]
     row_proj = band.sum(axis=1)
 
     # Search for the minimum row projection in the middle 50% of the region
@@ -362,7 +400,7 @@ def _force_split_tall_region(
 
     sub_proj = row_proj[min_y : max_y + 1]
     min_val = sub_proj.min()
-    
+
     # Find the index with the minimum value closest to the center
     min_indices = np.where(sub_proj == min_val)[0] + min_y
     center = h / 2.0
@@ -370,6 +408,23 @@ def _force_split_tall_region(
 
     h_left = int(split_idx)
     h_right = int(h - split_idx - 1)
+
+    if require_gap:
+        # Only accept a split at a genuine gap that yields two real TEXT rows; else keep whole.
+        ref = float(np.median(row_proj))
+        if ref <= 0:
+            ref = float(row_proj.max())
+        is_real_gap = ref > 0 and float(min_val) < _SPLIT_GAP_FRAC * ref
+        if not (is_real_gap and h_left >= _MIN_LINE_HEIGHT and h_right >= _MIN_LINE_HEIGHT):
+            return [region]
+        # Both halves must contain actual text in the text-isolated map -- otherwise this is one
+        # line sitting over a bright-background band (which the detection map counts as "bright"),
+        # not two stacked rows. Splitting that would emit a spurious background region. Require each
+        # half to have >= _MIN_LINE_WIDTH bright columns in split_map (gap_map when provided).
+        top_cols = int((split_map[local_top : local_top + h_left, :].sum(axis=0) >= _MIN_COL_BRIGHT).sum())
+        bot_cols = int((split_map[local_top + split_idx + 1 : local_bot + 1, :].sum(axis=0) >= _MIN_COL_BRIGHT).sum())
+        if top_cols < _MIN_LINE_WIDTH or bot_cols < _MIN_LINE_WIDTH:
+            return [region]
 
     results = []
 
@@ -386,7 +441,7 @@ def _force_split_tall_region(
                 "width": int(bright_cols[-1]) - int(bright_cols[0]) + 1,
                 "height": h_left,
             }
-            results.extend(_force_split_tall_region(left_reg, brightness_map, origin_x, origin_y, max_height))
+            results.extend(_force_split_tall_region(left_reg, brightness_map, origin_x, origin_y, max_height, require_gap, gap_map))
 
     # Right sub-region
     if h_right >= _MIN_LINE_HEIGHT:
@@ -400,7 +455,7 @@ def _force_split_tall_region(
                 "width": int(bright_cols[-1]) - int(bright_cols[0]) + 1,
                 "height": h_right,
             }
-            results.extend(_force_split_tall_region(right_reg, brightness_map, origin_x, origin_y, max_height))
+            results.extend(_force_split_tall_region(right_reg, brightness_map, origin_x, origin_y, max_height, require_gap, gap_map))
 
     if not results:
         return [region]
@@ -611,10 +666,14 @@ def detect_killfeed_from_frame(
     region = frame_bgra[y0:y1, x0:x1]
     gray   = cv2.cvtColor(region, cv2.COLOR_BGRA2GRAY)
     bmap   = (gray >= thresh).astype(np.float32)
+    # Text-isolated map for inter-row gap detection: near-white killfeed text survives a higher
+    # threshold while bright backgrounds drop out, exposing the gap between two stacked rows.
+    gmap   = (gray >= _GAP_TEXT_THRESH).astype(np.float32)
     _apply_hud_exclusion(bmap, x0, y0, content_x0, content_x1, frame_h)
 
     regions = detect_killfeed_regions(
-        bmap, x0, y0, frame_w=content_w, search_zone_active=search_zone is not None
+        bmap, x0, y0, frame_w=content_w, search_zone_active=search_zone is not None,
+        gap_map=gmap,
     )
     regions = _refine_regions(regions, bmap, x0, y0, verbose=False)
     return regions
