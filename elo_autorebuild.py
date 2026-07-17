@@ -88,29 +88,37 @@ def reapply_cached(temp_db: Path, map_path: Path) -> int:
 
 
 def atomic_swap(temp_db: Path, dst_db: Path, timeout_s: float = 60.0) -> None:
-    """Checkpoint temp_db and atomically replace dst_db with it, tolerating a transient reader lock.
+    """Publish the freshly-rebuilt temp_db INTO dst_db in place, safe while the API is serving.
 
-    On Windows a SQLite reader (e.g. the gui polling /rankings ~1x/sec) holds dst open in short
-    bursts, and os.replace fails if EITHER file is open. We retry at a SUB-SECOND interval so an
-    attempt lands in the gap between the reader's bursts, and gc.collect() first to finalize any of
-    our own connection objects still pending release."""
+    os.replace() cannot rename-over a file another process holds open on Windows, and the API's
+    SQLite readers keep elo.db open continuously (worsened by elo_db's connections that commit but
+    never close) -- so the old file-swap failed with 'locked for 60s' the whole time the API ran
+    (bead wt0). Instead of swapping the file, overwrite its CONTENTS via SQLite's online backup
+    API: it copies temp_db's pages into the live dst_db under a write lock that WAL readers coexist
+    with, and readers see the new snapshot atomically at commit. No rename, so no open-file conflict;
+    busy_timeout absorbs transient reader contention."""
     import gc
-    c = sqlite3.connect(str(temp_db))
-    c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    c.commit()
-    c.close()
-    gc.collect()                                      # finalize any lingering temp connections
-    deadline = time.time() + timeout_s
-    while True:
+    src = sqlite3.connect(str(temp_db))
+    src.execute("PRAGMA wal_checkpoint(TRUNCATE)")     # self-contained source, no pending WAL
+    src.commit()
+    dst = sqlite3.connect(str(dst_db), timeout=timeout_s)
+    try:
+        dst.execute("PRAGMA journal_mode=WAL")          # readers never block the backup writer
+        dst.execute(f"PRAGMA busy_timeout={int(timeout_s * 1000)}")
         try:
-            os.replace(temp_db, dst_db)               # atomic within the same directory
-            break
-        except PermissionError:
-            if time.time() >= deadline:
-                raise RuntimeError(f"could not swap into {dst_db.name} (locked for {timeout_s:.0f}s)")
-            time.sleep(0.2)                           # land between the reader's ~1s open bursts
-    # Remove now-stale sidecars so no reader pairs the new main file with an old WAL.
-    for side in (f"{dst_db}-wal", f"{dst_db}-shm", f"{temp_db}-wal", f"{temp_db}-shm"):
+            src.backup(dst)                             # temp -> live elo.db, in place, lock-safe
+        except sqlite3.OperationalError as e:
+            raise RuntimeError(f"could not publish into {dst_db.name}: {e}")
+        try:
+            dst.execute("PRAGMA wal_checkpoint(TRUNCATE)")   # fold the swap into the main file
+        except sqlite3.OperationalError:
+            pass                                        # a reader pins the WAL; harmless, folds later
+    finally:
+        dst.close()
+        src.close()
+        gc.collect()
+    # remove the now-consumed temp files (never dst's WAL -- that's live)
+    for side in (str(temp_db), f"{temp_db}-wal", f"{temp_db}-shm"):
         try:
             os.remove(side)
         except OSError:
