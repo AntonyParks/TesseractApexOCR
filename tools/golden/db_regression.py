@@ -22,6 +22,7 @@ import argparse
 import json
 import sqlite3
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -248,6 +249,117 @@ def _crop_files_exist(ctx: Ctx):
 
 
 # ---------------------------------------------------------------------------
+# Layer B: labeled identity regression
+# ---------------------------------------------------------------------------
+# Known-answer name fixtures run through the REAL canonicalization/dedupe. Two paths:
+#   'live'   -> feed OCR variants into a fresh PlayerDatabase (per-event first-seen/confusion merge)
+#   'dedupe' -> build player_ratings rows, run reprocess.deduplicate_players (leaderboard merge)
+# Each fixture is a GUARD (currently correct; a change that breaks it is a regression -> hard FAIL)
+# or a GAP (a currently-wrong behavior we've confirmed; reported as GAP, never blocks -- and if it
+# starts producing the CORRECT answer the harness says GAP-CLOSED so we can promote it to a guard).
+# Grow this list from every real mis-merge / mis-pick found. All fixtures below were verified against
+# live behavior on 2026-07-17.
+
+_B_FIXTURES = [
+    # --- live canonicalization guards (must stay correct) ---
+    {"id": "live.merge.axle_8b", "path": "live", "kind": "identities",
+     "variants": ["axle8b44", "axlebb44"], "expect": 1, "status": "guard",
+     "note": "confusion 8<->b: two OCR reads of one player must fold to one identity"},
+    {"id": "live.merge.iakme_lakme", "path": "live", "kind": "identities",
+     "variants": ["iakme", "lakme"], "expect": 1, "status": "guard",
+     "note": "confusion i<->l (different prefix, 0.80 raw ratio): must still merge"},
+    {"id": "live.distinct.gibraltar_anon", "path": "live", "kind": "identities",
+     "variants": ["gibraltar2127", "gibraltar1619"], "expect": 2, "status": "guard",
+     "note": "distinct anon (different ####): _anon_digit_conflict must keep them separate"},
+    {"id": "live.distinct.axle_default", "path": "live", "kind": "identities",
+     "variants": ["axle1456", "axle8599"], "expect": 2, "status": "guard",
+     "note": "distinct default-name players must not merge"},
+
+    # --- dedupe canonical-choice guard ---
+    {"id": "dedupe.canon.mixedcase_wins", "path": "dedupe", "kind": "canonical",
+     "rows": [["Jimmy", 3], ["jimmy", 2], ["jimmyy", 4]], "expect": "Jimmy", "status": "guard",
+     "note": "mixed-case CamelCase must beat lowercase OCR mangles as the display name"},
+
+    # --- KNOWN GAPS (confirmed bugs; informational until fixed -- see beads) ---
+    {"id": "dedupe.canon.lowercase_bias", "path": "dedupe", "kind": "canonical",
+     "rows": [["jimmyy", 5], ["jimmy", 2]], "expect": "jimmy", "status": "gap",
+     "note": "canonical bias: both lowercase -> most-played garble 'jimmyy' wins over correct 'jimmy' "
+             "(get_canonical_score has no correctness/confidence signal)"},
+    {"id": "dedupe.distinct.anon_overmerge", "path": "dedupe", "kind": "distinct",
+     "rows": [["gibraltar2127", 4], ["gibraltar1619", 3]], "expect": None, "status": "gap",
+     "note": "dedupe raw-ratio edge lacks _anon_digit_conflict -> merges distinct anon "
+             "(latent: masked because anon are excluded before dedupe)"},
+]
+
+
+def _live_identities(variants: list[str], reps: int = 4) -> set[str]:
+    """Feed variants as timed observations into a fresh PlayerDatabase, return the distinct
+    canonical identities they resolve to. reps>1 so frequency-based promotion can act."""
+    from database import PlayerDatabase
+    db = PlayerDatabase()
+    t = 1000.0
+    for _ in range(reps):
+        for v in variants:
+            db.add_name_observation(v, t)
+            t += 1.0
+    return {db.find_best_canonical_match(v, t)[0] for v in variants}
+
+
+def _dedupe_merges(rows: list) -> list:
+    """rows = [[name, matches_played], ...]. Build a throwaway elo.db and return the real
+    deduplicate_players() merge decisions (list of (canonical, duplicates, stats))."""
+    import elo_db
+    import reprocess
+    tmp = Path(tempfile.mkdtemp()) / "elo_b.db"
+    elo_db.init_db(tmp)
+    for name, mp in rows:
+        elo_db.update_player_rating(name, 1000.0, int(mp), 0, 0, path=tmp)
+    return reprocess.deduplicate_players(tmp, dry_run=True)
+
+
+def _eval_fixture(fx: dict) -> tuple[bool, str]:
+    """Return (matches_correct_answer, human_detail)."""
+    if fx["path"] == "live":
+        ids = _live_identities(fx["variants"])
+        actual = len(ids)
+        detail = f"{fx['variants']} -> {actual} id(s) {sorted(ids)} (expect {fx['expect']})"
+        return actual == fx["expect"], detail
+    # dedupe
+    merges = _dedupe_merges(fx["rows"])
+    names = [r[0] for r in fx["rows"]]
+    if fx["kind"] == "canonical":
+        canon = merges[0][0] if merges else "(no-merge)"
+        detail = f"{names} -> canonical={canon!r} (expect {fx['expect']!r})"
+        return canon == fx["expect"], detail
+    # kind == 'distinct': correct == they did NOT merge
+    merged = bool(merges)
+    detail = (f"{names} -> {'MERGED as ' + repr(merges[0][0]) if merged else 'distinct'} "
+              f"(expect distinct)")
+    return (not merged), detail
+
+
+def run_layer_b() -> list[Result]:
+    """Run the identity fixtures. Needs no live DB. GUARD miss -> hard fail ('fail'); GAP that is
+    still wrong -> 'gap' (soft); GAP now correct -> 'warn' (GAP-CLOSED, promote it)."""
+    results: list[Result] = []
+    for fx in _B_FIXTURES:
+        try:
+            correct, detail = _eval_fixture(fx)
+        except Exception as e:  # a fixture that errors is itself a finding
+            results.append(Result(fx["id"], "logic", "fail", 1, [f"error: {e}"], note=fx["note"]))
+            continue
+        if fx["status"] == "guard":
+            sev, cnt = ("fail", 0) if correct else ("fail", 1)
+        else:  # gap
+            if correct:
+                sev, cnt = "warn", 1   # GAP-CLOSED: the bug is fixed -> promote to guard
+            else:
+                sev, cnt = "gap", 1    # still the known-wrong behavior
+        results.append(Result(fx["id"], "logic", sev, cnt, [detail], note=fx["note"]))
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -255,7 +367,7 @@ class _Skip(Exception):
     """Raised by a check when its precondition (e.g. a migrated column) is absent."""
 
 
-def run(kf_path: Path, elo_path: Path) -> list[Result]:
+def run_layer_a(kf_path: Path, elo_path: Path) -> list[Result]:
     ctx = Ctx(kf_path, elo_path)
     results: list[Result] = []
     try:
@@ -276,48 +388,68 @@ def run(kf_path: Path, elo_path: Path) -> list[Result]:
     return results
 
 
-def _print_report(results: list[Result]) -> int:
+def _tag(r: Result) -> str:
+    if r.skipped:
+        return "SKIP"
+    if r.count == 0:
+        return "PASS"
+    return {"fail": "FAIL", "gap": "GAP ", "warn": "WARN"}.get(r.severity, "WARN")
+
+
+def _print_section(title: str, results: list[Result]) -> None:
     print("=" * 78)
-    print("DB REGRESSION HARNESS  --  Layer A: structural invariants")
+    print(title)
     print("=" * 78)
-    worst = 0
     for r in results:
+        tag = _tag(r)
         if r.skipped:
-            print(f"  SKIP  {r.name:26s}  ({r.note})")
+            print(f"  SKIP  {r.name:28s}  ({r.note})")
             continue
-        ok = r.count == 0
-        tag = "PASS" if ok else ("FAIL" if r.severity == "fail" else "WARN")
-        if not ok:
-            worst = max(worst, 2 if r.severity == "fail" else 1)
-        print(f"  {tag:4s}  {r.name:26s}  violations={r.count}")
+        print(f"  {tag:4s}  {r.name:28s}  violations={r.count}")
         for ex in r.examples:
             print(f"           - {ex}")
-    print("-" * 78)
+        if tag in ("GAP ", "WARN", "FAIL") and r.note:
+            print(f"           ~ {r.note}")
+
+
+def _summary(results: list[Result]) -> None:
     hard = sum(1 for r in results if not r.skipped and r.severity == "fail" and r.count)
-    soft = sum(1 for r in results if not r.skipped and r.severity == "warn" and r.count)
-    print(f"  {hard} hard failure(s), {soft} warning(s), "
-          f"{sum(1 for r in results if r.skipped)} skipped.")
-    return worst
+    warn = sum(1 for r in results if not r.skipped and r.severity == "warn" and r.count)
+    gap = sum(1 for r in results if not r.skipped and r.severity == "gap" and r.count)
+    skip = sum(1 for r in results if r.skipped)
+    print("-" * 78)
+    print(f"  {hard} hard failure(s), {warn} warning(s), {gap} known gap(s), {skip} skipped.")
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="DB regression harness (Layer A: structural invariants)")
+    ap = argparse.ArgumentParser(description="DB regression harness (Layers A + B)")
+    ap.add_argument("--layer", choices=["A", "B", "all"], default="all",
+                    help="A=structural invariants (needs DBs); B=identity fixtures (no DB); default all")
     ap.add_argument("--db", type=Path, default=KILLFEED_DB_PATH, help="killfeed.db path")
     ap.add_argument("--elo-db", type=Path, default=ELO_DB_PATH, help="elo.db path")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--fail-on-warn", action="store_true", help="treat WARN as failure (exit 1)")
     args = ap.parse_args()
 
-    results = run(args.db, args.elo_db)
+    results: list[Result] = []
+    if args.layer in ("A", "all"):
+        a = run_layer_a(args.db, args.elo_db)
+        results += a
+        if not args.json:
+            _print_section("DB REGRESSION  --  Layer A: structural invariants", a)
+    if args.layer in ("B", "all"):
+        b = run_layer_b()
+        results += b
+        if not args.json:
+            _print_section("DB REGRESSION  --  Layer B: labeled identity regression", b)
 
     if args.json:
         print(json.dumps([{
             "name": r.name, "requires": r.requires, "severity": r.severity,
-            "count": r.count, "skipped": r.skipped, "note": r.note,
-            "examples": r.examples,
+            "count": r.count, "skipped": r.skipped, "note": r.note, "examples": r.examples,
         } for r in results], indent=2))
     else:
-        _print_report(results)
+        _summary(results)
 
     hard_fail = any(not r.skipped and r.severity == "fail" and r.count for r in results)
     warn_hit = any(not r.skipped and r.severity == "warn" and r.count for r in results)
