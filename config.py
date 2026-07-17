@@ -537,6 +537,15 @@ EASYOCR_TORCH_THREADS = 2
 LEADERBOARD_AUTO_REFRESH   = True
 LEADERBOARD_MAX_AGE_HOURS  = 24     # refresh only when the CSV is older than this
 
+# Auto-rebuild elo.db from killfeed.db on a timer while the pipeline captures (elo_autorebuild.py).
+# Launched as a child subprocess at startup and terminated on shutdown. Hybrid cadence: a fast
+# cached-merge rebuild every ELO_AUTOREBUILD_INTERVAL seconds, a full dedupe re-cluster every
+# ELO_AUTOREBUILD_CLEAN_EVERY cycles (~hourly at 600s). Each rebuild atomically swaps into elo.db
+# so the API never serves an empty board.
+ELO_AUTOREBUILD            = True
+ELO_AUTOREBUILD_INTERVAL   = 600    # seconds between rebuild starts
+ELO_AUTOREBUILD_CLEAN_EVERY = 6     # every Nth cycle is a full dedupe re-cluster
+
 # Knock vs kill distinction (2026-07-04). The Apex killfeed marks an actual elimination with a
 # small RED skull glyph next to the victim's name; a knockdown line shows only the weapon icon.
 # (A separate ORANGE circular badge marks the kill leader on either line type -- not a kill

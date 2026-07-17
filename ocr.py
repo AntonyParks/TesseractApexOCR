@@ -1401,6 +1401,24 @@ def main():
         print(f"[{w.streamer}] Worker started -> twitch.tv/{username}")
 
 
+    # Auto-rebuild elo.db from killfeed.db on a timer while we capture (child process; terminated
+    # on shutdown below). It builds to a temp DB and atomically swaps so the leaderboard API never
+    # serves an empty board mid-rebuild. See elo_autorebuild.py / config.ELO_AUTOREBUILD.
+    elo_rebuilder = None
+    if ELO_AUTOREBUILD:
+        import subprocess
+        try:
+            elo_rebuilder = subprocess.Popen(
+                [sys.executable, "-u", "elo_autorebuild.py",
+                 "--interval", str(ELO_AUTOREBUILD_INTERVAL),
+                 "--clean-every", str(ELO_AUTOREBUILD_CLEAN_EVERY)],
+                cwd=os.path.dirname(os.path.abspath(__file__)) or None,
+            )
+            print(f"[main] elo auto-rebuild started (pid {elo_rebuilder.pid}, "
+                  f"every {ELO_AUTOREBUILD_INTERVAL}s, clean every {ELO_AUTOREBUILD_CLEAN_EVERY})")
+        except Exception as e:
+            print(f"[main] elo auto-rebuild failed to start ({e}) — leaderboard won't auto-refresh")
+
     top_n = top_n_resolved  # None only when --channel is used explicitly
     _last_refresh = time.time()  # track last periodic top-stream refresh
     _last_liveness_check = time.time()  # track last periodic liveness sweep
@@ -1490,6 +1508,14 @@ def main():
                     new_w.start()
     except KeyboardInterrupt:
         print("\nStopping all workers...")
+
+    if elo_rebuilder is not None and elo_rebuilder.poll() is None:
+        print("Stopping elo auto-rebuild...")
+        elo_rebuilder.terminate()
+        try:
+            elo_rebuilder.wait(timeout=10)
+        except Exception:
+            elo_rebuilder.kill()
 
     for w in workers:
         w.stop()

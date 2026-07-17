@@ -80,3 +80,4 @@ tools/golden/data*/vod_arc/
 tools/golden/data*/vod_peek/
 tools/golden/data*/**/reads.jsonl.orig
 rank_samples/
+elo_dedupe_map.json
