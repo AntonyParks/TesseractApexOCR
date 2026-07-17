@@ -117,6 +117,27 @@ def atomic_swap(temp_db: Path, dst_db: Path, timeout_s: float = 60.0) -> None:
             pass
 
 
+def guard_check(killfeed: Path, elo_dst: Path) -> None:
+    """Warn-only DB regression check (Layer A structural invariants on the freshly-swapped DBs +
+    Layer B identity fixtures on the deployed code). Never raises; logs a one-line summary plus any
+    hard regressions and the known-gap count. Because this loop runs continuously alongside capture,
+    a corrupt rebuild OR a code change that regressed identity resolution surfaces in the operator's
+    log within a cycle, not days later on the board. (Beads owns core.hooksPath, so continuous
+    guarding here is the beads-safe substitute for a pre-commit gate.)"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "tools" / "golden"))
+        from db_regression import run_layer_a, run_layer_b
+        results = run_layer_a(killfeed, elo_dst) + run_layer_b()
+        hard = [r.name for r in results if not r.skipped and r.severity == "fail" and r.count]
+        gaps = sum(1 for r in results if not r.skipped and r.severity == "gap" and r.count)
+        if hard:
+            log(f"cycle guard: {len(hard)} REGRESSION(S): {', '.join(hard)}  ({gaps} known gap(s))")
+        else:
+            log(f"cycle guard: all invariants + identity fixtures pass ({gaps} known gap(s))")
+    except Exception as e:
+        log(f"cycle guard: check skipped ({e})")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Periodically rebuild elo.db while capturing.")
     ap.add_argument("--interval", type=int, default=600, help="target seconds between rebuild starts (default 600)")
@@ -156,6 +177,7 @@ def main() -> int:
             atomic_swap(temp, dst)
             dt = time.time() - t0
             log(f"cycle {cycle}: swapped into {dst.name} ({dt:.0f}s)")
+            guard_check(killfeed, dst)   # warn-only invariant check on the freshly-swapped DBs
         except Exception as e:
             log(f"cycle {cycle} FAILED: {e}")
 
