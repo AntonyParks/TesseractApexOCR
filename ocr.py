@@ -613,8 +613,13 @@ def _display_name(username: str) -> str:
 # ---------------------------------------------------------------------------
 
 # Keywords that appear in Apex killfeed lines but NOT in tournament overlays or lobby screens.
+# NOTE: 'kill_icon'/'killicon' are as essential as the gun forms — ocr_with_easyocr emits
+# <KILL_ICON> *instead of* <GUN_ICON> when the red elimination skull is detected, so a clean kill
+# line carries only the kill token. Omitting them made the crop-save gate reject 98% of kills,
+# leaving Kill events (the ones that feed ELO) with no source crop to audit against.
 _KILLFEED_KEYWORDS = frozenset({
-    'gun_icon', 'gunicon', 'reviving', 'bleed', 'spotted',
+    'gun_icon', 'gunicon', 'kill_icon', 'killicon',
+    'reviving', 'bleed', 'spotted',
     'shield', 'pinged', 'scan', 'audio', 'eliminated',
 })
 
