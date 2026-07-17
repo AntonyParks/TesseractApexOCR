@@ -201,11 +201,20 @@ class PlayerDatabase:
         o->0, s->5, b->8, g->9) but NOT fuzzed -- two clean-but-different numbers stay distinct, so
         this never merges distinct players (vmu-safe by construction)."""
         n = name.strip().lower()
-        m = re.match(r'^([a-z .\-_]{3,}?)[ .\-_]*([a-z0-9]{3,4})$', n)
+        # Legend#### optionally followed by a stray TRAILING token (stream tag / OCR junk):
+        # 'oct ane5832 t', 'horizon4574 tu7us', 'mad maggie8292 f'. The prefix class excludes
+        # digits, so the digit block is still captured unambiguously (audit 2026-07-16).
+        m = re.match(r'^([a-z .\-_]{3,}?)[ .\-_]*([a-z0-9]{3,4})(?:[ .\-_]+[a-z0-9]{1,5})?$', n)
         if not m:
             return None
+        raw = m.group(2)
+        # Require >=2 ACTUAL digits in the block. Otherwise a letter run that merely digit-recovers
+        # ('gots'->9015, 'soli'->5011) would falsely tag real names ('shagots yt', 'within solitude')
+        # as anonymized. Real Legend#### blocks always carry real digits.
+        if sum(ch.isdigit() for ch in raw) < 2:
+            return None
         prefix = m.group(1).replace(' ', '')
-        dig = m.group(2).translate(cls._DIGIT_RECOVER)
+        dig = raw.translate(cls._DIGIT_RECOVER)
         if not re.fullmatch(r'\d{3,4}', dig):
             return None
         best, best_r = None, 0.0
