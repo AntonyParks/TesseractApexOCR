@@ -114,11 +114,12 @@ function KillRow({ k, player }: { k: AuditKill; player: string }) {
   return (
     <div style={{ display: "flex", gap: "0.9rem", padding: "9px 12px", borderTop: "1px solid #191919",
                   alignItems: "flex-start", fontSize: "0.82rem" }}>
-      <div style={{ flex: "0 0 168px" }}>
+      <div style={{ flex: "0 0 340px" }}>
         {crop ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={crop} alt="source crop" style={{ maxWidth: 168, maxHeight: 44, borderRadius: 3,
-                 border: "1px solid #2a2a2a", display: "block", background: "#000" }} />
+          <img src={crop} alt="source crop" style={{ width: 340, maxHeight: 96, objectFit: "contain",
+                 borderRadius: 3, border: "1px solid #2a2a2a", display: "block", background: "#000",
+                 imageRendering: "pixelated" }} />
         ) : (
           <span style={{ color: "#555", fontStyle: "italic" }}>no crop</span>
         )}
