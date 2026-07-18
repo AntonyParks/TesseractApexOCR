@@ -468,6 +468,7 @@ def _refine_regions(
     origin_x: int,
     origin_y: int,
     verbose: bool = True,
+    gap_map: np.ndarray | None = None,
 ) -> list[dict]:
     """Split any merged regions that contain two distinct text sub-bands.
 
@@ -475,6 +476,16 @@ def _refine_regions(
     closely-spaced killfeed lines into a single region.  This pass re-checks
     each region with a stricter gap (_REFINE_GAP=3) and splits it if two
     sub-bands are found.
+
+    When gap_map (the 235-thresholded text-isolated map) is provided, a final
+    gap-aware pass also splits any surviving band that hides a genuine interior
+    gap even when it is <= _MAX_SINGLE_LINE_HEIGHT. Two consecutive
+    [Bleed Out]-highlighted killfeed rows keep the inter-row rows bright at the
+    detection threshold, so brightness_map sees one continuous cluster with no
+    gap; the gap is only visible in gap_map. Without this pass such a ~30-35px
+    double-line reaches the crop stage as one region (~0.8% of crops, bead nqu).
+    require_gap never bisects a true single line (0/3373 single-line crops
+    over-split in a corpus check).
     """
     refined: list[dict] = []
 
@@ -531,10 +542,19 @@ def _refine_regions(
                 "height": sub_h,
             })
 
-    # Force split too-tall regions to prevent double-line crops
+    # Force split too-tall regions to prevent double-line crops. The height-driven pass first
+    # rescues oversized (webcam/chat) merges; then, when a gap_map is available, a gap-aware pass
+    # splits any remaining band that hides a genuine interior gap even below _MAX_SINGLE_LINE_HEIGHT
+    # (highlight-bar-bridged double-lines the bmap clustering can't see -- bead nqu).
     final_refined = []
     for reg in refined:
-        final_refined.extend(_force_split_tall_region(reg, brightness_map, origin_x, origin_y, _MAX_SINGLE_LINE_HEIGHT))
+        for hs in _force_split_tall_region(reg, brightness_map, origin_x, origin_y, _MAX_SINGLE_LINE_HEIGHT):
+            if gap_map is not None:
+                final_refined.extend(_force_split_tall_region(
+                    hs, brightness_map, origin_x, origin_y, _MAX_SINGLE_LINE_HEIGHT,
+                    require_gap=True, gap_map=gap_map))
+            else:
+                final_refined.append(hs)
     return final_refined
 
 
@@ -675,7 +695,7 @@ def detect_killfeed_from_frame(
         bmap, x0, y0, frame_w=content_w, search_zone_active=search_zone is not None,
         gap_map=gmap,
     )
-    regions = _refine_regions(regions, bmap, x0, y0, verbose=False)
+    regions = _refine_regions(regions, bmap, x0, y0, verbose=False, gap_map=gmap)
     return regions
 
 
